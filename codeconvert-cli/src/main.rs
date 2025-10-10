@@ -22,7 +22,7 @@ use std::path::PathBuf;
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Commands,
 
     /// Enable verbose output (can be used multiple times: -v, -vv, -vvv)
     #[arg(short = 'v', long = "verbose", global = true, action = clap::ArgAction::Count)]
@@ -35,91 +35,13 @@ struct Cli {
     /// Write logs to file
     #[arg(long = "log-file", global = true)]
     log_file: Option<PathBuf>,
-
-    // Legacy flags (when no subcommand is used)
-    /// Convert FROM camelCase
-    #[arg(long = "from-camel", group = "from")]
-    from_camel: bool,
-
-    /// Convert FROM PascalCase
-    #[arg(long = "from-pascal", group = "from")]
-    from_pascal: bool,
-
-    /// Convert FROM snake_case
-    #[arg(long = "from-snake", group = "from")]
-    from_snake: bool,
-
-    /// Convert FROM SCREAMING_SNAKE_CASE
-    #[arg(long = "from-screaming-snake", group = "from")]
-    from_screaming_snake: bool,
-
-    /// Convert FROM kebab-case
-    #[arg(long = "from-kebab", group = "from")]
-    from_kebab: bool,
-
-    /// Convert FROM SCREAMING-KEBAB-CASE
-    #[arg(long = "from-screaming-kebab", group = "from")]
-    from_screaming_kebab: bool,
-
-    /// Convert TO camelCase
-    #[arg(long = "to-camel", group = "to")]
-    to_camel: bool,
-
-    /// Convert TO PascalCase
-    #[arg(long = "to-pascal", group = "to")]
-    to_pascal: bool,
-
-    /// Convert TO snake_case
-    #[arg(long = "to-snake", group = "to")]
-    to_snake: bool,
-
-    /// Convert TO SCREAMING_SNAKE_CASE
-    #[arg(long = "to-screaming-snake", group = "to")]
-    to_screaming_snake: bool,
-
-    /// Convert TO kebab-case
-    #[arg(long = "to-kebab", group = "to")]
-    to_kebab: bool,
-
-    /// Convert TO SCREAMING-KEBAB-CASE
-    #[arg(long = "to-screaming-kebab", group = "to")]
-    to_screaming_kebab: bool,
-
-    /// The directory or file to convert (legacy mode)
-    path: Option<PathBuf>,
-
-    /// Convert files recursively (legacy mode)
-    #[arg(short = 'r', long)]
-    recursive: bool,
-
-    /// Dry run the conversion (legacy mode)
-    #[arg(short = 'd', long = "dry-run")]
-    dry_run: bool,
-
-    /// File extensions to process (legacy mode)
-    #[arg(short = 'e', long = "extensions")]
-    extensions: Option<Vec<String>>,
-
-    /// Prefix to add to all converted words (legacy mode)
-    #[arg(long, default_value = "")]
-    prefix: String,
-
-    /// Suffix to add to all converted words (legacy mode)
-    #[arg(long, default_value = "")]
-    suffix: String,
-
-    /// Glob pattern to filter files (legacy mode)
-    #[arg(long)]
-    glob: Option<String>,
-
-    /// Regex pattern to filter which words get converted (legacy mode)
-    #[arg(long = "word-filter")]
-    word_filter: Option<String>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Convert between case formats
+    #[command(group(clap::ArgGroup::new("from").required(true).multiple(false)))]
+    #[command(group(clap::ArgGroup::new("to").required(true).multiple(false)))]
     Convert {
         /// Convert FROM camelCase
         #[arg(long = "from-camel", group = "from")]
@@ -528,7 +450,7 @@ fn main() -> anyhow::Result<()> {
     debug!("CLI arguments parsed successfully");
 
     let result = match cli.command {
-        Some(Commands::Convert {
+        Commands::Convert {
             from_camel,
             from_pascal,
             from_snake,
@@ -549,7 +471,7 @@ fn main() -> anyhow::Result<()> {
             suffix,
             glob,
             word_filter,
-        }) => {
+        } => {
             debug!("Running convert subcommand");
             run_convert(
                 from_camel,
@@ -575,88 +497,26 @@ fn main() -> anyhow::Result<()> {
             )
         }
 
-        Some(Commands::Clean {
+        Commands::Clean {
             path,
             recursive,
             dry_run,
             extensions,
-        }) => {
+        } => {
             debug!("Running clean subcommand");
             run_clean(path, recursive, dry_run, extensions)
         }
 
-        Some(Commands::Emojis {
+        Commands::Emojis {
             path,
             recursive,
             dry_run,
             extensions,
             replace_task,
             remove_other,
-        }) => {
+        } => {
             debug!("Running emojis subcommand");
             run_emojis(path, recursive, dry_run, extensions, replace_task, remove_other)
-        }
-
-        None => {
-            // Legacy mode - direct flags without subcommand
-            if let Some(path) = cli.path {
-                debug!("Running in legacy mode");
-
-                // Check if user is trying to use convert flags
-                let has_from = cli.from_camel
-                    || cli.from_pascal
-                    || cli.from_snake
-                    || cli.from_screaming_snake
-                    || cli.from_kebab
-                    || cli.from_screaming_kebab;
-
-                let has_to = cli.to_camel
-                    || cli.to_pascal
-                    || cli.to_snake
-                    || cli.to_screaming_snake
-                    || cli.to_kebab
-                    || cli.to_screaming_kebab;
-
-                if has_from && has_to {
-                    run_convert(
-                        cli.from_camel,
-                        cli.from_pascal,
-                        cli.from_snake,
-                        cli.from_screaming_snake,
-                        cli.from_kebab,
-                        cli.from_screaming_kebab,
-                        cli.to_camel,
-                        cli.to_pascal,
-                        cli.to_snake,
-                        cli.to_screaming_snake,
-                        cli.to_kebab,
-                        cli.to_screaming_kebab,
-                        path,
-                        cli.recursive,
-                        cli.dry_run,
-                        cli.extensions,
-                        cli.prefix,
-                        cli.suffix,
-                        cli.glob,
-                        cli.word_filter,
-                    )
-                } else {
-                    error!("Missing required arguments for case conversion");
-                    eprintln!("Error: Missing required arguments for case conversion");
-                    eprintln!("Usage: codeconvert --from-<format> --to-<format> <PATH>");
-                    eprintln!("   or: codeconvert clean <PATH>");
-                    eprintln!("\nRun 'codeconvert --help' for more information");
-                    std::process::exit(1);
-                }
-            } else {
-                error!("No command or path specified");
-                eprintln!("Error: No command or path specified");
-                eprintln!("\nUsage:");
-                eprintln!("  codeconvert convert --from-<format> --to-<format> <PATH>");
-                eprintln!("  codeconvert clean <PATH>");
-                eprintln!("\nRun 'codeconvert --help' for more information");
-                std::process::exit(1);
-            }
         }
     };
 

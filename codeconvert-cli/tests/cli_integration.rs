@@ -54,8 +54,9 @@ fn test_cli_help() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("codeconvert"));
-    assert!(stdout.contains("--from-camel"));
-    assert!(stdout.contains("--to-snake"));
+    assert!(stdout.contains("convert"));
+    assert!(stdout.contains("clean"));
+    assert!(stdout.contains("emojis"));
 }
 
 #[test]
@@ -67,7 +68,7 @@ fn test_cli_basic_conversion() {
     fs::write(&test_file, "myVariable = 'test'").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "--to-snake"])
+        .args(&["convert", "--from-camel", "--to-snake"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute codeconvert");
@@ -90,7 +91,7 @@ fn test_cli_dry_run() {
     fs::write(&test_file, original).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "--to-snake", "--dry-run"])
+        .args(&["convert", "--from-camel", "--to-snake", "--dry-run"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute codeconvert");
@@ -123,7 +124,7 @@ fn test_cli_recursive() {
     fs::write(&file2, "nestedVar = 2").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "--to-snake", "-r"])
+        .args(&["convert", "--from-camel", "--to-snake", "-r"])
         .arg(&test_dir)
         .output()
         .expect("Failed to execute codeconvert");
@@ -148,7 +149,7 @@ fn test_cli_with_prefix() {
     fs::write(&test_file, "myVariable = 'test'").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "--to-snake", "--prefix", "old_"])
+        .args(&["convert", "--from-camel", "--to-snake", "--prefix", "old_"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute codeconvert");
@@ -170,7 +171,7 @@ fn test_cli_with_suffix() {
     fs::write(&test_file, "myVariable = 'test'").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "--to-snake", "--suffix", "_new"])
+        .args(&["convert", "--from-camel", "--to-snake", "--suffix", "_new"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute codeconvert");
@@ -192,7 +193,7 @@ fn test_cli_word_filter() {
     fs::write(&test_file, "getUserName = 'alice'\nmyVariable = 123").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "--to-snake", "--word-filter", "^get.*"])
+        .args(&["convert", "--from-camel", "--to-snake", "--word-filter", "^get.*"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute codeconvert");
@@ -220,7 +221,7 @@ fn test_cli_multiple_extensions() {
     fs::write(&txt_file, "myVariable = 3").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "--to-snake", "-e", ".py", "-e", ".js"])
+        .args(&["convert", "--from-camel", "--to-snake", "-e", ".py", "-e", ".js"])
         .arg(&test_dir)
         .output()
         .expect("Failed to execute codeconvert");
@@ -241,7 +242,7 @@ fn test_cli_multiple_extensions() {
 #[test]
 fn test_cli_error_missing_from() {
     let output = Command::new(get_binary_path())
-        .args(&["--to-snake", "dummy.py"])
+        .args(&["convert", "--to-snake", "dummy.py"])
         .output()
         .expect("Failed to execute codeconvert");
 
@@ -253,7 +254,7 @@ fn test_cli_error_missing_from() {
 #[test]
 fn test_cli_error_missing_to() {
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "dummy.py"])
+        .args(&["convert", "--from-camel", "dummy.py"])
         .output()
         .expect("Failed to execute codeconvert");
 
@@ -265,7 +266,7 @@ fn test_cli_error_missing_to() {
 #[test]
 fn test_cli_error_conflicting_from() {
     let output = Command::new(get_binary_path())
-        .args(&["--from-camel", "--from-snake", "--to-kebab", "dummy.py"])
+        .args(&["convert", "--from-camel", "--from-snake", "--to-kebab", "dummy.py"])
         .output()
         .expect("Failed to execute codeconvert");
 
@@ -292,7 +293,7 @@ fn test_cli_all_format_combinations() {
         fs::write(&test_file, input).unwrap();
 
         let output = Command::new(get_binary_path())
-            .args(&[from_arg, to_arg, "-e", ".txt"])
+            .args(&["convert", from_arg, to_arg, "-e", ".txt"])
             .arg(&test_file)
             .output()
             .expect("Failed to execute codeconvert");
