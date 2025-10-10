@@ -1,0 +1,19 @@
+[package]
+name = "codeconvert"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line tool for code transformation and case conversion"
+
+[[bin]]
+name = "codeconvert"
+path = "src/main.rs"
+
+[dependencies]
+codeconvert-core = { path = "../codeconvert-core", features = ["parallel"] }
+codeconvert-plugins = { path = "../codeconvert-plugins" }
+
+clap = { version = "4.5", features = ["derive"] }
+anyhow.workspace = true

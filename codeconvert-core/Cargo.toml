@@ -1,0 +1,22 @@
+[package]
+name = "codeconvert-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core library for code transformation and case conversion"
+
+[dependencies]
+regex.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+glob.workspace = true
+
+# Optional dependencies for features
+rayon = { version = "1.8", optional = true }
+
+[features]
+default = ["parallel"]
+parallel = ["rayon"]

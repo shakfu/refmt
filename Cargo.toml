@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "codeconvert-core",
+    "codeconvert-cli",
+    "codeconvert-plugins",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+authors = ["CodeConvert Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/codeconvert"
+
+[workspace.dependencies]
+# Shared dependencies across workspace
+regex = "1.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+anyhow = "1.0"
+thiserror = "1.0"
+walkdir = "2.5"
+glob = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
