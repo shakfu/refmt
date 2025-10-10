@@ -114,6 +114,30 @@ enum Commands {
         #[arg(long, default_value = "")]
         suffix: String,
 
+        /// Strip prefix before conversion (e.g., 'm_' from 'm_userName')
+        #[arg(long = "strip-prefix")]
+        strip_prefix: Option<String>,
+
+        /// Strip suffix before conversion
+        #[arg(long = "strip-suffix")]
+        strip_suffix: Option<String>,
+
+        /// Replace prefix (from) before conversion (e.g., 'I' in 'IUserService')
+        #[arg(long = "replace-prefix-from")]
+        replace_prefix_from: Option<String>,
+
+        /// Replace prefix (to) before conversion (e.g., 'Abstract')
+        #[arg(long = "replace-prefix-to", requires = "replace_prefix_from")]
+        replace_prefix_to: Option<String>,
+
+        /// Replace suffix (from) before conversion
+        #[arg(long = "replace-suffix-from")]
+        replace_suffix_from: Option<String>,
+
+        /// Replace suffix (to) before conversion
+        #[arg(long = "replace-suffix-to", requires = "replace_suffix_from")]
+        replace_suffix_to: Option<String>,
+
         /// Glob pattern to filter files
         #[arg(long)]
         glob: Option<String>,
@@ -146,7 +170,7 @@ enum Commands {
         /// The directory or file to process
         path: PathBuf,
 
-        /// Process files recursively
+        /// Process files recursively [default: true]
         #[arg(short = 'r', long, default_value_t = true)]
         recursive: bool,
 
@@ -154,15 +178,15 @@ enum Commands {
         #[arg(short = 'd', long = "dry-run")]
         dry_run: bool,
 
-        /// File extensions to process
+        /// File extensions to process (default: .md, .txt, and common source files)
         #[arg(short = 'e', long = "extensions")]
         extensions: Option<Vec<String>>,
 
-        /// Replace task completion emojis with text (e.g., ✅ -> [x])
+        /// Replace task completion emojis with text (e.g., ✅ -> [x]) [default: true]
         #[arg(long = "replace-task", default_value_t = true)]
         replace_task: bool,
 
-        /// Remove all other emojis
+        /// Remove all other emojis [default: true]
         #[arg(long = "remove-other", default_value_t = true)]
         remove_other: bool,
     },
@@ -263,6 +287,12 @@ fn run_convert(
     extensions: Option<Vec<String>>,
     prefix: String,
     suffix: String,
+    strip_prefix: Option<String>,
+    strip_suffix: Option<String>,
+    replace_prefix_from: Option<String>,
+    replace_prefix_to: Option<String>,
+    replace_suffix_from: Option<String>,
+    replace_suffix_to: Option<String>,
     glob: Option<String>,
     word_filter: Option<String>,
 ) -> anyhow::Result<()> {
@@ -317,6 +347,12 @@ fn run_convert(
         dry_run,
         prefix,
         suffix,
+        strip_prefix,
+        strip_suffix,
+        replace_prefix_from,
+        replace_prefix_to,
+        replace_suffix_from,
+        replace_suffix_to,
         glob,
         word_filter,
     )?;
@@ -469,6 +505,12 @@ fn main() -> anyhow::Result<()> {
             extensions,
             prefix,
             suffix,
+            strip_prefix,
+            strip_suffix,
+            replace_prefix_from,
+            replace_prefix_to,
+            replace_suffix_from,
+            replace_suffix_to,
             glob,
             word_filter,
         } => {
@@ -492,6 +534,12 @@ fn main() -> anyhow::Result<()> {
                 extensions,
                 prefix,
                 suffix,
+                strip_prefix,
+                strip_suffix,
+                replace_prefix_from,
+                replace_prefix_to,
+                replace_suffix_from,
+                replace_suffix_to,
                 glob,
                 word_filter,
             )

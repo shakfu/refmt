@@ -23,6 +23,12 @@ fn test_library_basic_conversion() {
         String::new(),
         None,
         None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
     ).unwrap();
 
     converter.process_directory(&test_dir).unwrap();
@@ -56,6 +62,12 @@ fn test_library_with_prefix() {
         String::new(),
         None,
         None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
     ).unwrap();
 
     converter.process_directory(&test_dir).unwrap();
@@ -82,6 +94,12 @@ fn test_library_with_suffix() {
         false,
         String::new(),
         "_v2".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
         None,
         None,
     ).unwrap();
@@ -111,6 +129,12 @@ fn test_library_dry_run() {
         true,  // dry_run = true
         String::new(),
         String::new(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
         None,
         None,
     ).unwrap();
@@ -149,6 +173,12 @@ fn test_library_recursive() {
         String::new(),
         None,
         None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
     ).unwrap();
 
     converter.process_directory(&test_dir).unwrap();
@@ -179,6 +209,12 @@ fn test_library_word_filter() {
         false,
         String::new(),
         String::new(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
         None,
         Some("^get.*".to_string()),  // Only convert identifiers starting with "get"
     ).unwrap();
@@ -226,6 +262,12 @@ fn test_library_all_case_formats() {
             String::new(),
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         ).unwrap();
 
         converter.process_directory(&test_dir).unwrap();
@@ -235,4 +277,156 @@ fn test_library_all_case_formats() {
 
         fs::remove_dir_all(&test_dir).unwrap();
     }
+}
+
+#[test]
+fn test_library_strip_prefix() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_strip_prefix");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("test.cpp");
+    // Use PascalCase identifiers that start with "My" (matches PascalCase pattern)
+    fs::write(&test_file, "MyUserName user;\nMyUserId id;").unwrap();
+
+    let converter = CaseConverter::new(
+        CaseFormat::PascalCase,
+        CaseFormat::SnakeCase,
+        Some(vec![".cpp".to_string()]),
+        false,
+        false,
+        String::new(),
+        String::new(),
+        Some("My".to_string()),  // Strip "My" prefix
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ).unwrap();
+
+    converter.process_directory(&test_dir).unwrap();
+
+    let content = fs::read_to_string(&test_file).unwrap();
+    // MyUserName -> UserName (strip My) -> user_name (convert)
+    assert!(content.contains("user_name"));
+    // MyUserId -> UserId (strip My) -> user_id (convert)
+    assert!(content.contains("user_id"));
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_library_strip_suffix() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_strip_suffix");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("test.py");
+    fs::write(&test_file, "user_name_tmp = 'alice'\nuser_id_tmp = 123").unwrap();
+
+    let converter = CaseConverter::new(
+        CaseFormat::SnakeCase,
+        CaseFormat::CamelCase,
+        Some(vec![".py".to_string()]),
+        false,
+        false,
+        String::new(),
+        String::new(),
+        None,
+        Some("_tmp".to_string()),  // Strip "_tmp" suffix
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ).unwrap();
+
+    converter.process_directory(&test_dir).unwrap();
+
+    let content = fs::read_to_string(&test_file).unwrap();
+    // user_name_tmp -> user_name (strip "_tmp") -> userName (convert to camelCase)
+    assert!(content.contains("userName"));
+    // user_id_tmp -> user_id (strip "_tmp") -> userId (convert to camelCase)
+    assert!(content.contains("userId"));
+    assert!(!content.contains("_tmp"));
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_library_replace_prefix() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_replace_prefix");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("test.java");
+    // Use PascalCase identifiers starting with "Old" (matches PascalCase pattern)
+    fs::write(&test_file, "OldUserService service;\nOldDataProvider provider;").unwrap();
+
+    let converter = CaseConverter::new(
+        CaseFormat::PascalCase,
+        CaseFormat::SnakeCase,
+        Some(vec![".java".to_string()]),
+        false,
+        false,
+        String::new(),
+        String::new(),
+        None,
+        None,
+        Some("Old".to_string()),  // Replace "Old" prefix
+        Some("New".to_string()),  // with "New"
+        None,
+        None,
+        None,
+        None,
+    ).unwrap();
+
+    converter.process_directory(&test_dir).unwrap();
+
+    let content = fs::read_to_string(&test_file).unwrap();
+    // OldUserService -> NewUserService -> new_user_service
+    assert!(content.contains("new_user_service"));
+    // OldDataProvider -> NewDataProvider -> new_data_provider
+    assert!(content.contains("new_data_provider"));
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_library_strip_and_add_prefix() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_strip_and_add");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("test.c");
+    // Use PascalCase identifiers starting with Old that match the pattern
+    fs::write(&test_file, "OldUserName userName;\nOldUserId userId;").unwrap();
+
+    let converter = CaseConverter::new(
+        CaseFormat::PascalCase,
+        CaseFormat::SnakeCase,
+        Some(vec![".c".to_string()]),
+        false,
+        false,
+        "new_".to_string(),  // Add "new_" prefix after conversion
+        String::new(),
+        Some("Old".to_string()),  // Strip "Old" prefix before conversion
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ).unwrap();
+
+    converter.process_directory(&test_dir).unwrap();
+
+    let content = fs::read_to_string(&test_file).unwrap();
+    // OldUserName -> UserName (strip) -> user_name (convert) -> new_user_name (add prefix)
+    assert!(content.contains("new_user_name"));
+    // OldUserId -> UserId (strip) -> user_id (convert) -> new_user_id (add prefix)
+    assert!(content.contains("new_user_id"));
+
+    fs::remove_dir_all(&test_dir).unwrap();
 }

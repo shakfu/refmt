@@ -15,6 +15,12 @@ pub struct CaseConverter {
     dry_run: bool,
     prefix: String,
     suffix: String,
+    strip_prefix: Option<String>,
+    strip_suffix: Option<String>,
+    replace_prefix_from: Option<String>,
+    replace_prefix_to: Option<String>,
+    replace_suffix_from: Option<String>,
+    replace_suffix_to: Option<String>,
     glob_pattern: Option<glob::Pattern>,
     word_filter: Option<Regex>,
     source_pattern: Regex,
@@ -30,6 +36,12 @@ impl CaseConverter {
         dry_run: bool,
         prefix: String,
         suffix: String,
+        strip_prefix: Option<String>,
+        strip_suffix: Option<String>,
+        replace_prefix_from: Option<String>,
+        replace_prefix_to: Option<String>,
+        replace_suffix_from: Option<String>,
+        replace_suffix_to: Option<String>,
         glob_pattern: Option<String>,
         word_filter: Option<String>,
     ) -> crate::Result<Self> {
@@ -60,6 +72,12 @@ impl CaseConverter {
             dry_run,
             prefix,
             suffix,
+            strip_prefix,
+            strip_suffix,
+            replace_prefix_from,
+            replace_prefix_to,
+            replace_suffix_from,
+            replace_suffix_to,
             glob_pattern,
             word_filter,
             source_pattern,
@@ -68,14 +86,47 @@ impl CaseConverter {
 
     /// Converts a single identifier
     fn convert(&self, name: &str) -> String {
-        // Apply word filter if provided
-        if let Some(ref filter) = self.word_filter {
-            if !filter.is_match(name) {
-                return name.to_string();
+        let mut processed_name = name.to_string();
+
+        // Step 1: Strip prefix if specified
+        if let Some(ref strip_pfx) = self.strip_prefix {
+            if processed_name.starts_with(strip_pfx) {
+                processed_name = processed_name[strip_pfx.len()..].to_string();
             }
         }
 
-        let words = self.from_format.split_words(name);
+        // Step 2: Strip suffix if specified
+        if let Some(ref strip_sfx) = self.strip_suffix {
+            if processed_name.ends_with(strip_sfx) {
+                processed_name = processed_name[..processed_name.len() - strip_sfx.len()].to_string();
+            }
+        }
+
+        // Step 3: Replace prefix if specified
+        if let (Some(ref from_pfx), Some(ref to_pfx)) = (&self.replace_prefix_from, &self.replace_prefix_to) {
+            if processed_name.starts_with(from_pfx) {
+                processed_name = format!("{}{}", to_pfx, &processed_name[from_pfx.len()..]);
+            }
+        }
+
+        // Step 4: Replace suffix if specified
+        if let (Some(ref from_sfx), Some(ref to_sfx)) = (&self.replace_suffix_from, &self.replace_suffix_to) {
+            if processed_name.ends_with(from_sfx) {
+                processed_name = format!("{}{}", &processed_name[..processed_name.len() - from_sfx.len()], to_sfx);
+            }
+        }
+
+        // Step 5: Apply word filter if provided
+        if let Some(ref filter) = self.word_filter {
+            if !filter.is_match(&processed_name) {
+                return name.to_string(); // Return original if filter doesn't match
+            }
+        }
+
+        // Step 6: Apply case conversion
+        let words = self.from_format.split_words(&processed_name);
+
+        // Step 7: Add prefix/suffix (existing functionality)
         self.to_format.join_words(&words, &self.prefix, &self.suffix)
     }
 
