@@ -26,6 +26,21 @@ Organized as a Cargo workspace:
 - Dry-run mode to preview changes
 - Automatically skips hidden files and build directories
 
+### Emoji Transformation
+- Replace task completion emojis with text alternatives (✅ → [x], ☐ → [ ], etc.)
+- Remove non-task emojis from code and documentation
+- Smart replacements for common task tracking symbols
+- Configurable behavior (replace task emojis, remove others, or both)
+- Support for markdown, documentation, and source files
+
+### Logging & UI
+- Multi-level verbosity control (`-v`, `-vv`, `-vvv`)
+- Quiet mode for silent operation (`-q`)
+- File logging for debugging (`--log-file`)
+- Progress spinners with indicatif
+- Automatic operation timing
+- Color-coded console output
+
 ## Installation
 
 Install from the workspace:
@@ -142,6 +157,55 @@ Clean a single file:
 codeconvert clean myfile.py
 ```
 
+### Emoji Transformation
+
+Replace task emojis with text in markdown files:
+```bash
+codeconvert emojis docs/
+```
+
+Process with dry-run to preview changes:
+```bash
+codeconvert emojis --dry-run README.md
+```
+
+Only replace task emojis, keep other emojis:
+```bash
+codeconvert emojis --replace-task --no-remove-other docs/
+```
+
+Process specific file types:
+```bash
+codeconvert emojis -e .md -e .txt project/
+```
+
+### Logging and Debugging
+
+Control output verbosity:
+```bash
+# Info level output (-v)
+codeconvert -v convert --from-camel --to-snake src/
+
+# Debug level output (-vv)
+codeconvert -vv clean src/
+
+# Silent mode (errors only)
+codeconvert -q convert --from-camel --to-snake src/
+
+# Log to file
+codeconvert --log-file debug.log -v convert --from-camel --to-snake src/
+```
+
+Output example with `-v`:
+```
+2025-10-10T00:15:08.927Z [INFO] Converting from CamelCase to SnakeCase
+2025-10-10T00:15:08.927Z [INFO] Target path: /tmp/test.py
+2025-10-10T00:15:08.927Z [INFO] Recursive: false, Dry run: false
+Converted '/tmp/test.py'
+2025-10-10T00:15:08.931Z [INFO] Conversion completed successfully
+2025-10-10T00:15:08.931Z [INFO] run_convert(), Elapsed=4.089125ms
+```
+
 ## Case Format Options
 
 - `--from-camel` / `--to-camel` - camelCase (firstName, lastName)
@@ -185,6 +249,31 @@ codeconvert clean -e .py src/
 Preview what would be cleaned without making changes:
 ```bash
 codeconvert clean --dry-run .
+```
+
+### Emoji Transformation Examples
+
+Transform task emojis in documentation:
+```bash
+codeconvert emojis -r docs/
+```
+
+Example transformation:
+```markdown
+Before:
+- Task done ✅
+- Task pending ☐
+- Warning ⚠ issue
+
+After:
+- Task done [x]
+- Task pending [ ]
+- Warning [!] issue
+```
+
+Process only markdown files:
+```bash
+codeconvert emojis -e .md README.md
 ```
 
 ## License

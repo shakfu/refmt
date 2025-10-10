@@ -1,5 +1,12 @@
 use clap::{Parser, Subcommand};
-use codeconvert_core::{CaseConverter, CaseFormat, WhitespaceCleaner, WhitespaceOptions};
+use codeconvert_core::{
+    CaseConverter, CaseFormat, EmojiOptions, EmojiTransformer, WhitespaceCleaner,
+    WhitespaceOptions,
+};
+use indicatif::{ProgressBar, ProgressStyle};
+use log::{debug, error, info};
+use logging_timer::time;
+use simplelog::*;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -10,11 +17,24 @@ use std::path::PathBuf;
     long_about = "A modular code transformation framework.\n\n\
                   Commands:\n\
                   - convert: Convert between case formats\n\
-                  - clean: Remove trailing whitespace"
+                  - clean: Remove trailing whitespace\n\
+                  - emojis: Remove or replace emojis with text alternatives"
 )]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Enable verbose output (can be used multiple times: -v, -vv, -vvv)
+    #[arg(short = 'v', long = "verbose", global = true, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    /// Suppress all output except errors
+    #[arg(short = 'q', long = "quiet", global = true)]
+    quiet: bool,
+
+    /// Write logs to file
+    #[arg(long = "log-file", global = true)]
+    log_file: Option<PathBuf>,
 
     // Legacy flags (when no subcommand is used)
     /// Convert FROM camelCase
@@ -198,6 +218,84 @@ enum Commands {
         #[arg(short = 'e', long = "extensions")]
         extensions: Option<Vec<String>>,
     },
+
+    /// Remove or replace emojis with text alternatives
+    Emojis {
+        /// The directory or file to process
+        path: PathBuf,
+
+        /// Process files recursively
+        #[arg(short = 'r', long, default_value_t = true)]
+        recursive: bool,
+
+        /// Dry run (don't modify files)
+        #[arg(short = 'd', long = "dry-run")]
+        dry_run: bool,
+
+        /// File extensions to process
+        #[arg(short = 'e', long = "extensions")]
+        extensions: Option<Vec<String>>,
+
+        /// Replace task completion emojis with text (e.g., ✅ -> [x])
+        #[arg(long = "replace-task", default_value_t = true)]
+        replace_task: bool,
+
+        /// Remove all other emojis
+        #[arg(long = "remove-other", default_value_t = true)]
+        remove_other: bool,
+    },
+}
+
+/// Initialize logging based on verbosity level
+fn init_logging(verbose: u8, quiet: bool, log_file: Option<PathBuf>) -> anyhow::Result<()> {
+    let log_level = if quiet {
+        LevelFilter::Error
+    } else {
+        match verbose {
+            0 => LevelFilter::Warn,
+            1 => LevelFilter::Info,
+            2 => LevelFilter::Debug,
+            _ => LevelFilter::Trace,
+        }
+    };
+
+    let config = ConfigBuilder::new()
+        .set_time_format_rfc3339()
+        .set_thread_level(LevelFilter::Off)
+        .set_target_level(LevelFilter::Off)
+        .build();
+
+    let mut loggers: Vec<Box<dyn SharedLogger>> = vec![TermLogger::new(
+        log_level,
+        config.clone(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    )];
+
+    if let Some(log_path) = log_file {
+        let file = std::fs::File::create(&log_path)?;
+        loggers.push(WriteLogger::new(LevelFilter::Debug, config, file));
+        eprintln!("Logging to file: {}", log_path.display());
+    }
+
+    CombinedLogger::init(loggers)?;
+
+    debug!("Logging initialized with level: {:?}", log_level);
+    Ok(())
+}
+
+/// Create a progress spinner
+fn create_spinner(message: &str) -> ProgressBar {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+    );
+    spinner.set_message(message.to_string());
+    spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+    spinner
 }
 
 fn determine_case_format(
@@ -223,6 +321,7 @@ fn determine_case_format(
     }
 }
 
+#[time("info")]
 fn run_convert(
     from_camel: bool,
     from_pascal: bool,
@@ -263,6 +362,31 @@ fn run_convert(
         to_screaming_kebab,
     );
 
+    info!(
+        "Converting from {:?} to {:?}",
+        from_format, to_format
+    );
+    info!("Target path: {}", path.display());
+    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
+
+    if let Some(ref exts) = extensions {
+        debug!("File extensions: {:?}", exts);
+    }
+    if !prefix.is_empty() {
+        debug!("Prefix: '{}'", prefix);
+    }
+    if !suffix.is_empty() {
+        debug!("Suffix: '{}'", suffix);
+    }
+    if let Some(ref pattern) = glob {
+        debug!("Glob pattern: '{}'", pattern);
+    }
+    if let Some(ref filter) = word_filter {
+        debug!("Word filter: '{}'", filter);
+    }
+
+    let spinner = create_spinner("Processing files...");
+
     let converter = CaseConverter::new(
         from_format,
         to_format,
@@ -275,14 +399,135 @@ fn run_convert(
         word_filter,
     )?;
 
-    converter.process_directory(&path)?;
+    let result = converter.process_directory(&path);
+
+    spinner.finish_and_clear();
+
+    match result {
+        Ok(_) => {
+            info!("Conversion completed successfully");
+            Ok(())
+        }
+        Err(e) => {
+            error!("Conversion failed: {}", e);
+            Err(e)
+        }
+    }
+}
+
+#[time("info")]
+fn run_clean(
+    path: PathBuf,
+    recursive: bool,
+    dry_run: bool,
+    extensions: Option<Vec<String>>,
+) -> anyhow::Result<()> {
+    info!("Cleaning whitespace from: {}", path.display());
+    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
+
+    if let Some(ref exts) = extensions {
+        debug!("File extensions: {:?}", exts);
+    }
+
+    let mut options = WhitespaceOptions::default();
+    options.recursive = recursive;
+    options.dry_run = dry_run;
+
+    if let Some(exts) = extensions {
+        options.file_extensions = exts;
+    }
+
+    let spinner = create_spinner("Cleaning files...");
+
+    let cleaner = WhitespaceCleaner::new(options);
+    let (files, lines) = cleaner.process(&path)?;
+
+    spinner.finish_and_clear();
+
+    if files > 0 {
+        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
+        info!(
+            "{}Cleaned {} lines in {} file(s)",
+            prefix, lines, files
+        );
+        println!(
+            "{}Cleaned {} lines in {} file(s)",
+            prefix, lines, files
+        );
+    } else {
+        info!("No files needed cleaning");
+        println!("No files needed cleaning");
+    }
+
+    Ok(())
+}
+
+#[time("info")]
+fn run_emojis(
+    path: PathBuf,
+    recursive: bool,
+    dry_run: bool,
+    extensions: Option<Vec<String>>,
+    replace_task: bool,
+    remove_other: bool,
+) -> anyhow::Result<()> {
+    info!("Processing emojis from: {}", path.display());
+    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
+    info!(
+        "Replace task emojis: {}, Remove other emojis: {}",
+        replace_task, remove_other
+    );
+
+    if let Some(ref exts) = extensions {
+        debug!("File extensions: {:?}", exts);
+    }
+
+    let mut options = EmojiOptions::default();
+    options.recursive = recursive;
+    options.dry_run = dry_run;
+    options.replace_task_emojis = replace_task;
+    options.remove_other_emojis = remove_other;
+
+    if let Some(exts) = extensions {
+        options.file_extensions = exts;
+    }
+
+    let spinner = create_spinner("Transforming emojis...");
+
+    let transformer = EmojiTransformer::new(options);
+    let (files, changes) = transformer.process(&path)?;
+
+    spinner.finish_and_clear();
+
+    if files > 0 {
+        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
+        info!(
+            "{}Transformed emojis in {} file(s) ({} changes)",
+            prefix, files, changes
+        );
+        println!(
+            "{}Transformed emojis in {} file(s) ({} changes)",
+            prefix, files, changes
+        );
+    } else {
+        info!("No files contained emojis to transform");
+        println!("No files contained emojis to transform");
+    }
+
     Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    // Initialize logging
+    if let Err(e) = init_logging(cli.verbose, cli.quiet, cli.log_file.clone()) {
+        eprintln!("Warning: Failed to initialize logging: {}", e);
+    }
+
+    debug!("CLI arguments parsed successfully");
+
+    let result = match cli.command {
         Some(Commands::Convert {
             from_camel,
             from_pascal,
@@ -305,6 +550,7 @@ fn main() -> anyhow::Result<()> {
             glob,
             word_filter,
         }) => {
+            debug!("Running convert subcommand");
             run_convert(
                 from_camel,
                 from_pascal,
@@ -335,33 +581,27 @@ fn main() -> anyhow::Result<()> {
             dry_run,
             extensions,
         }) => {
-            let mut options = WhitespaceOptions::default();
-            options.recursive = recursive;
-            options.dry_run = dry_run;
+            debug!("Running clean subcommand");
+            run_clean(path, recursive, dry_run, extensions)
+        }
 
-            if let Some(exts) = extensions {
-                options.file_extensions = exts;
-            }
-
-            let cleaner = WhitespaceCleaner::new(options);
-            let (files, lines) = cleaner.process(&path)?;
-
-            if files > 0 {
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                println!(
-                    "{}Cleaned {} lines in {} file(s)",
-                    prefix, lines, files
-                );
-            } else {
-                println!("No files needed cleaning");
-            }
-
-            Ok(())
+        Some(Commands::Emojis {
+            path,
+            recursive,
+            dry_run,
+            extensions,
+            replace_task,
+            remove_other,
+        }) => {
+            debug!("Running emojis subcommand");
+            run_emojis(path, recursive, dry_run, extensions, replace_task, remove_other)
         }
 
         None => {
             // Legacy mode - direct flags without subcommand
             if let Some(path) = cli.path {
+                debug!("Running in legacy mode");
+
                 // Check if user is trying to use convert flags
                 let has_from = cli.from_camel
                     || cli.from_pascal
@@ -401,6 +641,7 @@ fn main() -> anyhow::Result<()> {
                         cli.word_filter,
                     )
                 } else {
+                    error!("Missing required arguments for case conversion");
                     eprintln!("Error: Missing required arguments for case conversion");
                     eprintln!("Usage: codeconvert --from-<format> --to-<format> <PATH>");
                     eprintln!("   or: codeconvert clean <PATH>");
@@ -408,6 +649,7 @@ fn main() -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
             } else {
+                error!("No command or path specified");
                 eprintln!("Error: No command or path specified");
                 eprintln!("\nUsage:");
                 eprintln!("  codeconvert convert --from-<format> --to-<format> <PATH>");
@@ -416,5 +658,13 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
+    };
+
+    if let Err(ref e) = result {
+        error!("Operation failed: {}", e);
+    } else {
+        debug!("Operation completed successfully");
     }
+
+    result
 }

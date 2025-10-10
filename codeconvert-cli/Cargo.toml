@@ -17,3 +17,9 @@ codeconvert-plugins = { path = "../codeconvert-plugins" }
 
 clap = { version = "4.5", features = ["derive"] }
 anyhow.workspace = true
+
+# Logging and UI
+log.workspace = true
+simplelog.workspace = true
+indicatif.workspace = true
+logging_timer.workspace = true

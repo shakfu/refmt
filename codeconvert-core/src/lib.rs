@@ -5,11 +5,13 @@
 
 pub mod case;
 pub mod converter;
+pub mod emoji;
 pub mod whitespace;
 
 // Re-export commonly used types
 pub use case::CaseFormat;
 pub use converter::CaseConverter;
+pub use emoji::{EmojiOptions, EmojiTransformer};
 pub use whitespace::{WhitespaceCleaner, WhitespaceOptions};
 
 // Re-export Result type
