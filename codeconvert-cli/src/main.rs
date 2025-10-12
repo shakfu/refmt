@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use codeconvert_core::{
-    CaseConverter, CaseFormat, EmojiOptions, EmojiTransformer, WhitespaceCleaner,
-    WhitespaceOptions,
+    CaseConverter, CaseFormat, CaseTransform, EmojiOptions, EmojiTransformer, FileRenamer,
+    RenameOptions, SpaceReplace, WhitespaceCleaner, WhitespaceOptions,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, error, info};
@@ -18,7 +18,8 @@ use std::path::PathBuf;
                   Commands:\n\
                   - convert: Convert between case formats\n\
                   - clean: Remove trailing whitespace\n\
-                  - emojis: Remove or replace emojis with text alternatives"
+                  - emojis: Remove or replace emojis with text alternatives\n\
+                  - rename_files: Rename files with various transformations"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -189,6 +190,57 @@ enum Commands {
         /// Remove all other emojis [default: true]
         #[arg(long = "remove-other", default_value_t = true)]
         remove_other: bool,
+    },
+
+    /// Rename files with various transformations
+    #[command(name = "rename_files")]
+    RenameFiles {
+        /// The directory or file to rename
+        path: PathBuf,
+
+        /// Process directories recursively [default: true]
+        #[arg(short = 'r', long, default_value_t = true)]
+        recursive: bool,
+
+        /// Dry run (don't rename files)
+        #[arg(short = 'd', long = "dry-run")]
+        dry_run: bool,
+
+        /// Convert to lowercase
+        #[arg(long = "to-lowercase")]
+        to_lowercase: bool,
+
+        /// Convert to UPPERCASE
+        #[arg(long = "to-uppercase")]
+        to_uppercase: bool,
+
+        /// Capitalize (first letter uppercase, rest lowercase)
+        #[arg(long = "to-capitalize")]
+        to_capitalize: bool,
+
+        /// Replace separators (spaces, hyphens, underscores) with underscores
+        #[arg(long = "underscored")]
+        underscored: bool,
+
+        /// Replace separators (spaces, hyphens, underscores) with hyphens
+        #[arg(long = "hyphenated")]
+        hyphenated: bool,
+
+        /// Add prefix to filename
+        #[arg(long = "add-prefix")]
+        add_prefix: Option<String>,
+
+        /// Remove prefix from filename
+        #[arg(long = "rm-prefix")]
+        rm_prefix: Option<String>,
+
+        /// Add suffix to filename (before extension)
+        #[arg(long = "add-suffix")]
+        add_suffix: Option<String>,
+
+        /// Remove suffix from filename (before extension)
+        #[arg(long = "rm-suffix")]
+        rm_suffix: Option<String>,
     },
 }
 
@@ -475,6 +527,87 @@ fn run_emojis(
     Ok(())
 }
 
+#[time("info")]
+fn run_rename(
+    path: PathBuf,
+    recursive: bool,
+    dry_run: bool,
+    to_lowercase: bool,
+    to_uppercase: bool,
+    to_capitalize: bool,
+    underscored: bool,
+    hyphenated: bool,
+    add_prefix: Option<String>,
+    rm_prefix: Option<String>,
+    add_suffix: Option<String>,
+    rm_suffix: Option<String>,
+) -> anyhow::Result<()> {
+    info!("Renaming files in: {}", path.display());
+    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
+
+    let mut options = RenameOptions::default();
+    options.recursive = recursive;
+    options.dry_run = dry_run;
+
+    // Set case transform (only one should be selected)
+    if to_lowercase {
+        options.case_transform = CaseTransform::Lowercase;
+        debug!("Case transform: Lowercase");
+    } else if to_uppercase {
+        options.case_transform = CaseTransform::Uppercase;
+        debug!("Case transform: Uppercase");
+    } else if to_capitalize {
+        options.case_transform = CaseTransform::Capitalize;
+        debug!("Case transform: Capitalize");
+    }
+
+    // Set separator replacement (only one should be selected)
+    if underscored {
+        options.space_replace = SpaceReplace::Underscore;
+        debug!("Separator replacement: Underscore");
+    } else if hyphenated {
+        options.space_replace = SpaceReplace::Hyphen;
+        debug!("Separator replacement: Hyphen");
+    }
+
+    // Set prefix/suffix options
+    options.add_prefix = add_prefix.clone();
+    options.remove_prefix = rm_prefix.clone();
+    options.add_suffix = add_suffix.clone();
+    options.remove_suffix = rm_suffix.clone();
+
+    if let Some(ref prefix) = add_prefix {
+        debug!("Add prefix: '{}'", prefix);
+    }
+    if let Some(ref prefix) = rm_prefix {
+        debug!("Remove prefix: '{}'", prefix);
+    }
+    if let Some(ref suffix) = add_suffix {
+        debug!("Add suffix: '{}'", suffix);
+    }
+    if let Some(ref suffix) = rm_suffix {
+        debug!("Remove suffix: '{}'", suffix);
+    }
+
+    let spinner = create_spinner("Renaming files...");
+
+    let renamer = FileRenamer::new(options);
+    let count = renamer.process(&path)?;
+
+    spinner.finish_and_clear();
+
+    if count > 0 {
+        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
+        info!("{}Renamed {} file(s)", prefix, count);
+        println!("{}Renamed {} file(s)", prefix, count);
+    } else {
+        info!("No files needed renaming");
+        println!("No files needed renaming");
+    }
+
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -565,6 +698,37 @@ fn main() -> anyhow::Result<()> {
         } => {
             debug!("Running emojis subcommand");
             run_emojis(path, recursive, dry_run, extensions, replace_task, remove_other)
+        }
+
+        Commands::RenameFiles {
+            path,
+            recursive,
+            dry_run,
+            to_lowercase,
+            to_uppercase,
+            to_capitalize,
+            underscored,
+            hyphenated,
+            add_prefix,
+            rm_prefix,
+            add_suffix,
+            rm_suffix,
+        } => {
+            debug!("Running rename subcommand");
+            run_rename(
+                path,
+                recursive,
+                dry_run,
+                to_lowercase,
+                to_uppercase,
+                to_capitalize,
+                underscored,
+                hyphenated,
+                add_prefix,
+                rm_prefix,
+                add_suffix,
+                rm_suffix,
+            )
         }
     };
 

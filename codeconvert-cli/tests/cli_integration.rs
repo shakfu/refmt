@@ -475,3 +475,308 @@ fn test_cli_convert_subcommand() {
 
     fs::remove_dir_all(&test_dir).unwrap();
 }
+
+// Rename tests
+
+#[test]
+fn test_cli_rename_lowercase() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_lowercase");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("TestFile.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--to-lowercase"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+
+    // Check that the file exists with the new name
+    let new_file = test_dir.join("testfile.txt");
+    assert!(new_file.exists());
+
+    // Verify content is preserved
+    let content = fs::read_to_string(&new_file).unwrap();
+    assert_eq!(content, "content");
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_uppercase() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_uppercase");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("testfile.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--to-uppercase"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+
+    // Check that the file exists with the new name
+    let new_file = test_dir.join("TESTFILE.txt");
+    assert!(new_file.exists());
+
+    // Verify content is preserved
+    let content = fs::read_to_string(&new_file).unwrap();
+    assert_eq!(content, "content");
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_capitalize() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_capitalize");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("testFile.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--to-capitalize"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+
+    // Check that the file exists with the new name
+    let new_file = test_dir.join("Testfile.txt");
+    assert!(new_file.exists());
+
+    // Verify content is preserved
+    let content = fs::read_to_string(&new_file).unwrap();
+    assert_eq!(content, "content");
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_to_underscore() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_underscore");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("test file.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--underscored"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+    assert!(test_dir.join("test_file.txt").exists());
+    assert!(!test_file.exists());
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_to_hyphen() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_hyphen");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("test file.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--hyphenated"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+    assert!(test_dir.join("test-file.txt").exists());
+    assert!(!test_file.exists());
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_add_prefix() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_add_prefix");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("file.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--add-prefix", "new_"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+    assert!(test_dir.join("new_file.txt").exists());
+    assert!(!test_file.exists());
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_rm_prefix() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_rm_prefix");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("old_file.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--rm-prefix", "old_"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+    assert!(test_dir.join("file.txt").exists());
+    assert!(!test_file.exists());
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_add_suffix() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_add_suffix");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("file.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--add-suffix", "_backup"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+    assert!(test_dir.join("file_backup.txt").exists());
+    assert!(!test_file.exists());
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_rm_suffix() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_rm_suffix");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("file_old.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--rm-suffix", "_old"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+    assert!(test_dir.join("file.txt").exists());
+    assert!(!test_file.exists());
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_combined() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_combined");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("old_Test File.txt");
+    fs::write(&test_file, "content").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&[
+            "rename_files",
+            "--rm-prefix",
+            "old_",
+            "--underscored",
+            "--to-lowercase",
+            "--add-suffix",
+            "_new",
+        ])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+    assert!(test_dir.join("test_file_new.txt").exists());
+    assert!(!test_file.exists());
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_dry_run() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_dry");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("TestFile.txt");
+    let original_content = "content";
+    fs::write(&test_file, original_content).unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--to-lowercase", "--dry-run"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+
+    // File should still exist and be unchanged
+    assert!(test_file.exists());
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(content, original_content);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[DRY-RUN]") || stdout.contains("Would rename"));
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_recursive() {
+    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_recursive");
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let sub_dir = test_dir.join("subdir");
+    fs::create_dir_all(&sub_dir).unwrap();
+
+    let file1 = test_dir.join("File1.txt");
+    let file2 = sub_dir.join("File2.txt");
+
+    fs::write(&file1, "content1").unwrap();
+    fs::write(&file2, "content2").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--to-lowercase", "-r"])
+        .arg(&test_dir)
+        .output()
+        .expect("Failed to execute codeconvert rename");
+
+    assert!(output.status.success());
+    assert!(test_dir.join("file1.txt").exists());
+    assert!(sub_dir.join("file2.txt").exists());
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_rename_help() {
+    let output = Command::new(get_binary_path())
+        .args(&["rename_files", "--help"])
+        .output()
+        .expect("Failed to execute codeconvert rename --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Rename files"));
+}
