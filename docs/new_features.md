@@ -4,15 +4,15 @@ This document outlines potential features and transformations that could be inco
 
 ## Priority Classification
 
-- 🟢 **Easy**: Low complexity, high value additions
-- 🟡 **Medium**: Moderate complexity, good value
-- 🔴 **Complex**: High complexity, specialized use cases
+- [green] **Easy**: Low complexity, high value additions
+- [yellow] **Medium**: Moderate complexity, good value
+-  **Complex**: High complexity, specialized use cases
 
 ---
 
 ## 1. Identifier Transformations
 
-### 🟢 Prefix/Suffix Operations
+### [green] Prefix/Suffix Operations
 
 **Strip Prefix/Suffix**
 ```rust
@@ -36,7 +36,7 @@ AbstractUserService, AbstractDataProvider
 
 **Implementation**: Extend `CaseConverter` with `PrefixAction` enum
 
-### 🟢 Boolean Naming Conventions
+### [green] Boolean Naming Conventions
 
 Add or normalize boolean prefixes:
 ```rust
@@ -54,7 +54,7 @@ has_value → hasValue
 - Standardize boolean naming across codebase
 - Language-specific conventions (Java: `is*`, Python: `is_*`)
 
-### 🟡 Pluralization/Singularization
+### [yellow] Pluralization/Singularization
 
 ```python
 # Before
@@ -68,7 +68,7 @@ item = fetch_item()
 
 **Implementation**: Requires inflection library or rules database
 
-### 🟡 Abbreviation Expansion/Contraction
+### [yellow] Abbreviation Expansion/Contraction
 
 ```javascript
 // Expand
@@ -87,7 +87,7 @@ message → msg
 
 ## 2. String and Literal Transformations
 
-### 🟢 Quote Style Conversion
+### [green] Quote Style Conversion
 
 **Single ↔ Double Quotes**
 ```javascript
@@ -111,7 +111,7 @@ const greeting = `Hello, ${name}!`;
 
 **Implementation**: Language-aware string detection with escape handling
 
-### 🟢 String Format Modernization
+### [green] String Format Modernization
 
 **Python f-strings**
 ```python
@@ -131,7 +131,7 @@ print(f"Value: {value}")
 println!("{:?}", value);  // Ensure consistent formatting
 ```
 
-### 🟡 Number Literal Formatting
+### [yellow] Number Literal Formatting
 
 ```rust
 // Before
@@ -147,7 +147,7 @@ let y = 0xFF;
 
 ## 3. Code Style Transformations
 
-### 🟢 Whitespace Normalization
+### [green] Whitespace Normalization
 
 **Tabs ↔ Spaces**
 ```python
@@ -164,7 +164,7 @@ def function():
 - Trailing whitespace removal
 - Consistent empty lines
 
-### 🟢 Comment Style Conversion
+### [green] Comment Style Conversion
 
 **C-style languages**
 ```c
@@ -192,7 +192,7 @@ def foo():
 
 ## 4. Import/Module Management
 
-### 🟡 Import Organization
+### [yellow] Import Organization
 
 **Sorting and Grouping**
 ```python
@@ -213,7 +213,7 @@ from myapp import utils
 
 **Groups**: Standard library, Third-party, Local imports
 
-### 🟡 Import Style Conversion
+### [yellow] Import Style Conversion
 
 **JavaScript/TypeScript**
 ```javascript
@@ -235,7 +235,7 @@ from module import *
 from module import func1, func2, Class1
 ```
 
-### 🟢 Remove Unused Imports
+### [green] Remove Unused Imports
 
 ```python
 # Before
@@ -253,7 +253,7 @@ Detect and remove `json` import.
 
 ## 5. Language-Specific Modernization
 
-### 🟡 JavaScript/TypeScript
+### [yellow] JavaScript/TypeScript
 
 **var → let/const**
 ```javascript
@@ -294,7 +294,7 @@ async function fetchData() {
 }
 ```
 
-### 🟡 Python Modernization
+### [yellow] Python Modernization
 
 **Type Hints Addition**
 ```python
@@ -319,7 +319,7 @@ if (data := fetch_data()):
     process(data)
 ```
 
-### 🔴 Rust Modernization
+### Rust Modernization
 
 **unwrap() → ? operator**
 ```rust
@@ -350,7 +350,7 @@ if let Some(value) = some_option {
 
 ## 6. Structural Pattern Transformations
 
-### 🔴 Getter/Setter Pattern Detection
+### Getter/Setter Pattern Detection
 
 ```java
 // Before (verbose Java)
@@ -369,7 +369,7 @@ public String name { get; set; }  // C#
 @property  // Python decorator
 ```
 
-### 🔴 Builder Pattern → Constructor
+### Builder Pattern → Constructor
 
 ```javascript
 // Before
@@ -387,7 +387,7 @@ const user = new User({
 });
 ```
 
-### 🔴 Callback → Promise → Async/Await
+### Callback → Promise → Async/Await
 
 ```javascript
 // Stage 1: Callback
@@ -415,7 +415,7 @@ async function fetchUser(id) {
 
 ## 7. API Migration and Deprecation
 
-### 🟡 Deprecated API Replacement
+### [yellow] Deprecated API Replacement
 
 **Configurable Mappings**
 ```yaml
@@ -448,7 +448,7 @@ fetch('/api/users')
     .then(data => { ... });
 ```
 
-### 🟡 Framework Migration Helpers
+### [yellow] Framework Migration Helpers
 
 **React Class → Functional Components**
 ```javascript
@@ -475,7 +475,7 @@ function UserProfile(props) {
 
 ## 8. Code Quality Improvements
 
-### 🟢 Magic Number/String Extraction
+### [green] Magic Number/String Extraction
 
 ```python
 # Before
@@ -501,7 +501,7 @@ def validate_age(age):
 - Suggest constant extraction
 - Generate constant names
 
-### 🟡 Boolean Expression Simplification
+### [yellow] Boolean Expression Simplification
 
 ```javascript
 // Before
@@ -515,7 +515,7 @@ if (!enabled) { }
 if (value) { }
 ```
 
-### 🟡 Ternary ↔ if/else Conversion
+### [yellow] Ternary ↔ if/else Conversion
 
 ```javascript
 // Ternary → if/else
@@ -537,7 +537,7 @@ if (condition) {
 
 ## 9. Documentation Transformations
 
-### 🟡 Comment Format Conversion
+### [yellow] Comment Format Conversion
 
 **JSDoc ↔ TypeDoc**
 ```javascript
@@ -579,7 +579,7 @@ def calculate_total(items, tax_rate):
 
 ## 10. Advanced Pattern Matching
 
-### 🔴 Semantic Code Search
+### Semantic Code Search
 
 **AST-based Pattern Matching**
 ```javascript
@@ -597,7 +597,7 @@ function fetchData() {
 }
 ```
 
-### 🔴 Code Clone Detection
+### Code Clone Detection
 
 Identify duplicated code blocks and suggest extraction:
 ```python
@@ -624,7 +624,7 @@ def require_field(obj, field, message):
 
 ## 11. Performance Optimizations
 
-### 🟡 List Comprehension Conversion (Python)
+### [yellow] List Comprehension Conversion (Python)
 
 ```python
 # Before
@@ -637,7 +637,7 @@ for item in items:
 result = [item.value for item in items if item.is_valid()]
 ```
 
-### 🟡 Stream API (Java)
+### [yellow] Stream API (Java)
 
 ```java
 // Before
@@ -659,7 +659,7 @@ List<String> result = users.stream()
 
 ## 12. Testing and Quality Assurance
 
-### 🟡 Generate Test Stubs
+### [yellow] Generate Test Stubs
 
 ```python
 # From this function
@@ -779,7 +779,7 @@ When adding new transformations to refmt:
 ### Feature Name
 Brief description of transformation
 
-**Priority**: 🟢/🟡/🔴
+**Priority**: [green]/[yellow]/
 
 **Use Case**:
 Describe when users would need this
