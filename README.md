@@ -28,6 +28,7 @@ Organized as a Cargo workspace:
 
 ### Emoji Transformation
 - Replace task completion emojis with text alternatives (✅ → [x], ☐ → [ ], etc.)
+- Replace status indicator emojis (🟡 → [yellow], 🟢 → [green], 🔴 → [red])
 - Remove non-task emojis from code and documentation
 - Smart replacements for common task tracking symbols
 - Configurable behavior (replace task emojis, remove others, or both)
@@ -264,11 +265,17 @@ Before:
 - Task done ✅
 - Task pending ☐
 - Warning ⚠ issue
+- 🟡 In progress
+- 🟢 Complete
+- 🔴 Blocked
 
 After:
 - Task done [x]
 - Task pending [ ]
 - Warning [!] issue
+- [yellow] In progress
+- [green] Complete
+- [red] Blocked
 ```
 
 Process only markdown files:
