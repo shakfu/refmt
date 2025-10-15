@@ -66,6 +66,8 @@ impl EmojiTransformer {
             [\u274E]|          # Negative squared cross mark (❎)
             [\u26A0]|          # Warning sign (⚠)
             [\u26D4]|          # No entry (⛔)
+            [\u2B50]|          # Star (⭐)
+            [\u{1F7E1}]|       # Yellow circle (🟡)
             [\u{1F4DD}]|       # Memo (📝)
             [\u{1F4CB}]|       # Clipboard (📋)
             [\u{1F4C4}]|       # Page facing up (📄)
@@ -161,6 +163,8 @@ impl EmojiTransformer {
             "\u{274E}" => "[X]",      // ❎ -> [X]
             "\u{26A0}" => "[!]",      // ⚠ -> [!]
             "\u{26D4}" => "[!]",      // ⛔ -> [!]
+            "\u{2B50}" => "[*]",      // ⭐ -> [*]
+            "\u{1F7E1}" => "[o]",     // 🟡 -> [o]
             "\u{1F4DD}" => "[note]",  // 📝 -> [note]
             "\u{1F4CB}" => "[list]",  // 📋 -> [list]
             "\u{1F4C4}" => "[doc]",   // 📄 -> [doc]
@@ -290,7 +294,7 @@ mod tests {
         fs::write(&test_file, updated).unwrap();
 
         let transformer = EmojiTransformer::with_defaults();
-        let (files, _) = transformer.process(&test_file).unwrap();
+        let (_files, _) = transformer.process(&test_file).unwrap();
 
         // Should still be valid markdown
         let content = fs::read_to_string(&test_file).unwrap();
@@ -406,6 +410,28 @@ mod tests {
         let (files, _) = transformer.process(&test_dir).unwrap();
 
         assert_eq!(files, 2);
+
+        fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[test]
+    fn test_star_and_circle_replacement() {
+        let test_dir = std::env::temp_dir().join("codeconvert_emoji_star_circle");
+        fs::create_dir_all(&test_dir).unwrap();
+
+        let test_file = test_dir.join("test.md");
+        fs::write(&test_file, "⭐ Important task\n🟡 In progress\n").unwrap();
+
+        let transformer = EmojiTransformer::with_defaults();
+        let (files, _) = transformer.process(&test_file).unwrap();
+
+        if files > 0 {
+            let content = fs::read_to_string(&test_file).unwrap();
+            assert!(content.contains("[*]"), "Star emoji should be replaced with [*]");
+            assert!(content.contains("[o]"), "Yellow circle should be replaced with [o]");
+            assert!(!content.contains("⭐"), "Star emoji should be removed");
+            assert!(!content.contains("🟡"), "Yellow circle should be removed");
+        }
 
         fs::remove_dir_all(&test_dir).unwrap();
     }
