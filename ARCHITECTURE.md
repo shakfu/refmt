@@ -22,9 +22,9 @@ This document describes the architecture for a modular, composable code transfor
 The project is organized as a Cargo workspace with clear separation between library and binary:
 
 ```
-codeconvert/
+refmt/
 ├── Cargo.toml                 # Workspace definition
-├── codeconvert-core/          # Core library
+├── refmt-core/          # Core library
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs             # Library entry point
@@ -80,7 +80,7 @@ codeconvert/
 │           ├── transaction.rs # TransactionManager
 │           └── parallel.rs    # Parallel execution helpers
 │
-├── codeconvert-plugins/       # Plugin system (separate crate)
+├── refmt-plugins/       # Plugin system (separate crate)
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
@@ -88,7 +88,7 @@ codeconvert/
 │       ├── loader.rs          # Dynamic plugin loading
 │       └── registry.rs        # Plugin registry
 │
-├── codeconvert-transformers/  # Extended transformers (optional features)
+├── refmt-transformers/  # Extended transformers (optional features)
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
@@ -97,7 +97,7 @@ codeconvert/
 │       ├── type_hints.rs      # TypeTransformer
 │       └── literals.rs        # LiteralTransformer
 │
-├── codeconvert-cli/           # CLI binary
+├── refmt-cli/           # CLI binary
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs            # Entry point
@@ -142,10 +142,10 @@ codeconvert/
 ```toml
 [workspace]
 members = [
-    "codeconvert-core",
-    "codeconvert-plugins",
-    "codeconvert-transformers",
-    "codeconvert-cli",
+    "refmt-core",
+    "refmt-plugins",
+    "refmt-transformers",
+    "refmt-cli",
 ]
 
 [workspace.package]
@@ -163,12 +163,12 @@ anyhow = "1.0"
 thiserror = "1.0"
 ```
 
-### Core Library (codeconvert-core)
+### Core Library (refmt-core)
 
 ```toml
-# codeconvert-core/Cargo.toml
+# refmt-core/Cargo.toml
 [package]
-name = "codeconvert-core"
+name = "refmt-core"
 version.workspace = true
 edition.workspace = true
 
@@ -191,23 +191,23 @@ ast = ["tree-sitter"]
 full = ["parallel", "ast"]
 ```
 
-### CLI Binary (codeconvert-cli)
+### CLI Binary (refmt-cli)
 
 ```toml
-# codeconvert-cli/Cargo.toml
+# refmt-cli/Cargo.toml
 [package]
-name = "codeconvert"
+name = "refmt"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "codeconvert"
+name = "refmt"
 path = "src/main.rs"
 
 [dependencies]
-codeconvert-core = { path = "../codeconvert-core", features = ["full"] }
-codeconvert-plugins = { path = "../codeconvert-plugins" }
-codeconvert-transformers = { path = "../codeconvert-transformers", optional = true }
+refmt-core = { path = "../refmt-core", features = ["full"] }
+refmt-plugins = { path = "../refmt-plugins" }
+refmt-transformers = { path = "../refmt-transformers", optional = true }
 
 clap = { version = "4.5", features = ["derive"] }
 serde_yaml.workspace = true
@@ -215,7 +215,7 @@ anyhow.workspace = true
 
 [features]
 default = ["extended"]
-extended = ["codeconvert-transformers"]
+extended = ["refmt-transformers"]
 ```
 
 ### Module Responsibilities
@@ -249,10 +249,10 @@ extended = ["codeconvert-transformers"]
 
 #### Adding a New Transformer
 
-1. **Create transformer module** in `codeconvert-core/src/transformers/`:
+1. **Create transformer module** in `refmt-core/src/transformers/`:
 
 ```rust
-// codeconvert-core/src/transformers/my_feature.rs
+// refmt-core/src/transformers/my_feature.rs
 use crate::traits::Transformer;
 use crate::context::TransformContext;
 use anyhow::Result;
@@ -273,14 +273,14 @@ impl Transformer for MyFeatureTransformer {
 }
 ```
 
-2. **Export from module** in `codeconvert-core/src/transformers/mod.rs`:
+2. **Export from module** in `refmt-core/src/transformers/mod.rs`:
 
 ```rust
 pub mod my_feature;
 pub use my_feature::MyFeatureTransformer;
 ```
 
-3. **Add builder method** in `codeconvert-core/src/pipeline.rs`:
+3. **Add builder method** in `refmt-core/src/pipeline.rs`:
 
 ```rust
 impl PipelineBuilder {
@@ -293,7 +293,7 @@ impl PipelineBuilder {
 }
 ```
 
-4. **Add CLI command** in `codeconvert-cli/src/cli.rs`:
+4. **Add CLI command** in `refmt-cli/src/cli.rs`:
 
 ```rust
 #[derive(Args)]
@@ -308,7 +308,7 @@ No core files need modification - the feature is completely isolated!
 
 Similar process:
 
-1. Create `codeconvert-core/src/filters/my_filter.rs`
+1. Create `refmt-core/src/filters/my_filter.rs`
 2. Implement `Filter` trait
 3. Export from `filters/mod.rs`
 4. Add `PipelineBuilder::filter_my_filter()` method
@@ -319,23 +319,23 @@ Similar process:
 For large features, create a new workspace member:
 
 ```bash
-cargo new --lib codeconvert-feature-x
+cargo new --lib refmt-feature-x
 ```
 
 ```toml
-# codeconvert-feature-x/Cargo.toml
+# refmt-feature-x/Cargo.toml
 [package]
-name = "codeconvert-feature-x"
+name = "refmt-feature-x"
 
 [dependencies]
-codeconvert-core = { path = "../codeconvert-core" }
+refmt-core = { path = "../refmt-core" }
 
 # Feature-specific deps
 ```
 
 ```rust
-// codeconvert-feature-x/src/lib.rs
-use codeconvert_core::traits::Transformer;
+// refmt-feature-x/src/lib.rs
+use refmt_core::traits::Transformer;
 
 pub struct FeatureXTransformer {
     // ...
@@ -349,12 +349,12 @@ impl Transformer for FeatureXTransformer {
 Then optionally include in CLI:
 
 ```toml
-# codeconvert-cli/Cargo.toml
+# refmt-cli/Cargo.toml
 [dependencies]
-codeconvert-feature-x = { path = "../codeconvert-feature-x", optional = true }
+refmt-feature-x = { path = "../refmt-feature-x", optional = true }
 
 [features]
-feature-x = ["codeconvert-feature-x"]
+feature-x = ["refmt-feature-x"]
 ```
 
 ### Library Usage Patterns
@@ -366,12 +366,12 @@ Users can depend on just the core library:
 ```toml
 # User's Cargo.toml
 [dependencies]
-codeconvert-core = "0.2"
+refmt-core = "0.2"
 ```
 
 ```rust
 // User's code
-use codeconvert_core::{Pipeline, CaseFormat};
+use refmt_core::{Pipeline, CaseFormat};
 
 fn main() {
     let pipeline = Pipeline::builder()
@@ -386,8 +386,8 @@ fn main() {
 #### Extending with Custom Transformers
 
 ```rust
-use codeconvert_core::traits::Transformer;
-use codeconvert_core::TransformContext;
+use refmt_core::traits::Transformer;
+use refmt_core::TransformContext;
 
 struct MyCustomTransformer;
 
@@ -459,9 +459,9 @@ codegen-units = 1
 ```
 
 Build targets:
-- `cargo build -p codeconvert-core` - Library only
-- `cargo build -p codeconvert` - CLI with default features
-- `cargo build -p codeconvert --all-features` - Full CLI
+- `cargo build -p refmt-core` - Library only
+- `cargo build -p refmt` - CLI with default features
+- `cargo build -p refmt --all-features` - Full CLI
 - `cargo build --workspace` - Everything
 
 ### Feature Flags Organization
@@ -475,8 +475,8 @@ ast = ["tree-sitter"]
 
 # Transformer groups
 basic-transforms = []  # Case, quotes, prefix (always included)
-structural-transforms = ["codeconvert-transformers/structural"]
-language-transforms = ["codeconvert-transformers/language-specific"]
+structural-transforms = ["refmt-transformers/structural"]
+language-transforms = ["refmt-transformers/language-specific"]
 
 # Full feature set
 full = ["parallel", "ast", "structural-transforms", "language-transforms"]
@@ -486,14 +486,14 @@ full = ["parallel", "ast", "structural-transforms", "language-transforms"]
 
 The structure supports multiple deployment scenarios:
 
-1. **Library crate**: `codeconvert-core` published to crates.io
-2. **CLI binary**: `codeconvert` published to crates.io with `cargo install`
+1. **Library crate**: `refmt-core` published to crates.io
+2. **CLI binary**: `refmt` published to crates.io with `cargo install`
 3. **Plugins**: Published separately, loaded dynamically
 4. **Docker image**: Multi-stage build using workspace
 5. **WASM**: Core library compiled to WebAssembly
 
 This organization ensures:
-- **Library users** get minimal dependencies (just `codeconvert-core`)
+- **Library users** get minimal dependencies (just `refmt-core`)
 - **CLI users** get full featured binary
 - **Developers** can add features without touching core
 - **Plugins** are completely independent
@@ -1002,7 +1002,7 @@ println!("Applied {} changes", report.changes.len());
 ### Interactive CLI
 
 ```bash
-$ codeconvert interactive
+$ refmt interactive
 > search glob "**/*.js"
 Found 142 files
 
@@ -1136,7 +1136,7 @@ Provide compatibility layer for existing CLI:
 
 ```rust
 // Old API still works
-codeconvert --from-camel --to-snake src/
+refmt --from-camel --to-snake src/
 
 // Maps to new pipeline:
 Pipeline::builder()

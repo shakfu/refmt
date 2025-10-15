@@ -12,14 +12,14 @@ This release represents a major architectural overhaul and feature expansion. Th
 
 ### Changed
 - **BREAKING**: Restructured project as Cargo workspace
-  - **codeconvert-core**: Core library for transformations
-  - **codeconvert-cli**: Command-line binary
-  - **codeconvert-plugins**: Plugin system foundation
+  - **refmt-core**: Core library for transformations
+  - **refmt-cli**: Command-line binary
+  - **refmt-plugins**: Plugin system foundation
 - Library-first architecture enables programmatic usage
 - CLI now supports modern subcommand architecture with three commands:
-  - `codeconvert convert`: Case format conversion
-  - `codeconvert clean`: Whitespace cleaning
-  - `codeconvert emojis`: Emoji transformation
+  - `refmt convert`: Case format conversion
+  - `refmt clean`: Whitespace cleaning
+  - `refmt emojis`: Emoji transformation
 - Enhanced CLI with comprehensive logging and UI features
 - Maintained full backwards compatibility for legacy CLI interface (direct flags still work)
 
@@ -33,7 +33,7 @@ This release represents a major architectural overhaul and feature expansion. Th
 - Recursive processing (default: enabled, `-r` flag)
 - Extension filtering with sensible defaults for common code files
 - Automatically skips hidden files and build directories (`.git`, `node_modules`, `target`, etc.)
-- Example: `codeconvert clean src/`
+- Example: `refmt clean src/`
 
 **Emoji Transformation** (`emojis` subcommand)
 - Replaces task completion emojis with text alternatives for better compatibility
@@ -56,7 +56,7 @@ This release represents a major architectural overhaul and feature expansion. Th
   - `--replace-task`: Replace task emojis with text (default: true)
   - `--remove-other`: Remove non-task emojis (default: true)
 - Support for markdown, text, and source code files
-- Example: `codeconvert emojis README.md`
+- Example: `refmt emojis README.md`
 
 #### Logging & UI Enhancements
 
@@ -80,7 +80,7 @@ This release represents a major architectural overhaul and feature expansion. Th
   - `WhitespaceCleaner` and `WhitespaceOptions` for whitespace cleaning
   - `EmojiTransformer` and `EmojiOptions` for emoji transformation
 - Modular workspace structure for easier feature additions
-- Plugin system foundation in `codeconvert-plugins`
+- Plugin system foundation in `refmt-plugins`
 - Comprehensive inline documentation and module docs
 - Example library usage in integration tests
 
@@ -113,13 +113,13 @@ This release represents a major architectural overhaul and feature expansion. Th
 **Architecture**:
 - Split monolithic `src/main.rs` (437 lines) into organized modules across 3 crates
 - **Core modules**:
-  - `codeconvert-core/src/case.rs` - Case format definitions and conversion logic
-  - `codeconvert-core/src/converter.rs` - File processing and pattern matching
-  - `codeconvert-core/src/whitespace.rs` - Trailing whitespace removal
-  - `codeconvert-core/src/emoji.rs` - Emoji detection and replacement
-  - `codeconvert-core/src/lib.rs` - Public API exports
+  - `refmt-core/src/case.rs` - Case format definitions and conversion logic
+  - `refmt-core/src/converter.rs` - File processing and pattern matching
+  - `refmt-core/src/whitespace.rs` - Trailing whitespace removal
+  - `refmt-core/src/emoji.rs` - Emoji detection and replacement
+  - `refmt-core/src/lib.rs` - Public API exports
 - **CLI module**:
-  - `codeconvert-cli/src/main.rs` - Clap-based CLI with subcommands and logging
+  - `refmt-cli/src/main.rs` - Clap-based CLI with subcommands and logging
 
 **Implementation Highlights**:
 - Whitespace cleaner preserves file line endings (CRLF/LF)
@@ -144,7 +144,7 @@ This release represents a major architectural overhaul and feature expansion. Th
 ## [0.1.0] - 2025-10-10
 
 ### Added
-- Initial Rust implementation of codeconvert CLI tool with Python-compatible API
+- Initial Rust implementation of refmt CLI tool with Python-compatible API
 - Support for 6 case format conversions:
   - camelCase
   - PascalCase

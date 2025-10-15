@@ -14,19 +14,19 @@ fn get_binary_path() -> std::path::PathBuf {
         .to_path_buf();
 
     // The binary will be in the same directory as the test executable
-    path.push("codeconvert");
+    path.push("refmt");
 
     if !path.exists() {
         // Fallback: try to use cargo to build and get the path
         let _output = Command::new("cargo")
-            .args(&["build", "-p", "codeconvert", "--message-format=json"])
+            .args(&["build", "-p", "refmt", "--message-format=json"])
             .output()
-            .expect("Failed to build codeconvert");
+            .expect("Failed to build refmt");
 
         // Parse the JSON to find the binary path (simplified - just return the default path)
         std::env::current_dir()
             .expect("Failed to get current directory")
-            .join("target/debug/codeconvert")
+            .join("target/debug/refmt")
     } else {
         path
     }
@@ -37,7 +37,7 @@ fn test_cli_version() {
     let output = Command::new(get_binary_path())
         .arg("--version")
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -49,11 +49,11 @@ fn test_cli_help() {
     let output = Command::new(get_binary_path())
         .arg("--help")
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("codeconvert"));
+    assert!(stdout.contains("refmt"));
     assert!(stdout.contains("convert"));
     assert!(stdout.contains("clean"));
     assert!(stdout.contains("emojis"));
@@ -61,7 +61,7 @@ fn test_cli_help() {
 
 #[test]
 fn test_cli_basic_conversion() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_cli_basic");
+    let test_dir = std::env::temp_dir().join("refmt_test_cli_basic");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -71,7 +71,7 @@ fn test_cli_basic_conversion() {
         .args(&["convert", "--from-camel", "--to-snake"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
 
@@ -83,7 +83,7 @@ fn test_cli_basic_conversion() {
 
 #[test]
 fn test_cli_dry_run() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_cli_dry");
+    let test_dir = std::env::temp_dir().join("refmt_test_cli_dry");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -94,7 +94,7 @@ fn test_cli_dry_run() {
         .args(&["convert", "--from-camel", "--to-snake", "--dry-run"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
 
@@ -111,7 +111,7 @@ fn test_cli_dry_run() {
 
 #[test]
 fn test_cli_recursive() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_cli_recursive");
+    let test_dir = std::env::temp_dir().join("refmt_test_cli_recursive");
     fs::create_dir_all(&test_dir).unwrap();
 
     let sub_dir = test_dir.join("subdir");
@@ -127,7 +127,7 @@ fn test_cli_recursive() {
         .args(&["convert", "--from-camel", "--to-snake", "-r"])
         .arg(&test_dir)
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
 
@@ -142,7 +142,7 @@ fn test_cli_recursive() {
 
 #[test]
 fn test_cli_with_prefix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_cli_prefix");
+    let test_dir = std::env::temp_dir().join("refmt_test_cli_prefix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -152,7 +152,7 @@ fn test_cli_with_prefix() {
         .args(&["convert", "--from-camel", "--to-snake", "--prefix", "old_"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
 
@@ -164,7 +164,7 @@ fn test_cli_with_prefix() {
 
 #[test]
 fn test_cli_with_suffix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_cli_suffix");
+    let test_dir = std::env::temp_dir().join("refmt_test_cli_suffix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -174,7 +174,7 @@ fn test_cli_with_suffix() {
         .args(&["convert", "--from-camel", "--to-snake", "--suffix", "_new"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
 
@@ -186,7 +186,7 @@ fn test_cli_with_suffix() {
 
 #[test]
 fn test_cli_word_filter() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_cli_filter");
+    let test_dir = std::env::temp_dir().join("refmt_test_cli_filter");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -196,7 +196,7 @@ fn test_cli_word_filter() {
         .args(&["convert", "--from-camel", "--to-snake", "--word-filter", "^get.*"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
 
@@ -209,7 +209,7 @@ fn test_cli_word_filter() {
 
 #[test]
 fn test_cli_multiple_extensions() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_cli_exts");
+    let test_dir = std::env::temp_dir().join("refmt_test_cli_exts");
     fs::create_dir_all(&test_dir).unwrap();
 
     let py_file = test_dir.join("test.py");
@@ -224,7 +224,7 @@ fn test_cli_multiple_extensions() {
         .args(&["convert", "--from-camel", "--to-snake", "-e", ".py", "-e", ".js"])
         .arg(&test_dir)
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(output.status.success());
 
@@ -244,7 +244,7 @@ fn test_cli_error_missing_from() {
     let output = Command::new(get_binary_path())
         .args(&["convert", "--to-snake", "dummy.py"])
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -256,7 +256,7 @@ fn test_cli_error_missing_to() {
     let output = Command::new(get_binary_path())
         .args(&["convert", "--from-camel", "dummy.py"])
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -268,7 +268,7 @@ fn test_cli_error_conflicting_from() {
     let output = Command::new(get_binary_path())
         .args(&["convert", "--from-camel", "--from-snake", "--to-kebab", "dummy.py"])
         .output()
-        .expect("Failed to execute codeconvert");
+        .expect("Failed to execute refmt");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -286,7 +286,7 @@ fn test_cli_all_format_combinations() {
     ];
 
     for (idx, (from_arg, to_arg, input, expected)) in test_cases.iter().enumerate() {
-        let test_dir = std::env::temp_dir().join(format!("codeconvert_test_cli_combo_{}", idx));
+        let test_dir = std::env::temp_dir().join(format!("refmt_test_cli_combo_{}", idx));
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -296,7 +296,7 @@ fn test_cli_all_format_combinations() {
             .args(&["convert", from_arg, to_arg, "-e", ".txt"])
             .arg(&test_file)
             .output()
-            .expect("Failed to execute codeconvert");
+            .expect("Failed to execute refmt");
 
         assert!(output.status.success(), "Failed for {} -> {}", from_arg, to_arg);
 
@@ -311,7 +311,7 @@ fn test_cli_all_format_combinations() {
 
 #[test]
 fn test_cli_clean_basic() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_clean_basic");
+    let test_dir = std::env::temp_dir().join("refmt_test_clean_basic");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.txt");
@@ -321,7 +321,7 @@ fn test_cli_clean_basic() {
         .args(&["clean"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert clean");
+        .expect("Failed to execute refmt clean");
 
     assert!(output.status.success());
 
@@ -336,7 +336,7 @@ fn test_cli_clean_basic() {
 
 #[test]
 fn test_cli_clean_dry_run() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_clean_dry");
+    let test_dir = std::env::temp_dir().join("refmt_test_clean_dry");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.txt");
@@ -347,7 +347,7 @@ fn test_cli_clean_dry_run() {
         .args(&["clean", "--dry-run"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert clean");
+        .expect("Failed to execute refmt clean");
 
     assert!(output.status.success());
 
@@ -363,7 +363,7 @@ fn test_cli_clean_dry_run() {
 
 #[test]
 fn test_cli_clean_recursive() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_clean_recursive");
+    let test_dir = std::env::temp_dir().join("refmt_test_clean_recursive");
     fs::create_dir_all(&test_dir).unwrap();
 
     let sub_dir = test_dir.join("subdir");
@@ -379,7 +379,7 @@ fn test_cli_clean_recursive() {
         .args(&["clean", "-r"])
         .arg(&test_dir)
         .output()
-        .expect("Failed to execute codeconvert clean");
+        .expect("Failed to execute refmt clean");
 
     assert!(output.status.success());
 
@@ -394,7 +394,7 @@ fn test_cli_clean_recursive() {
 
 #[test]
 fn test_cli_clean_extension_filtering() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_clean_exts");
+    let test_dir = std::env::temp_dir().join("refmt_test_clean_exts");
     fs::create_dir_all(&test_dir).unwrap();
 
     let py_file = test_dir.join("test.py");
@@ -407,7 +407,7 @@ fn test_cli_clean_extension_filtering() {
         .args(&["clean", "-e", ".py"])
         .arg(&test_dir)
         .output()
-        .expect("Failed to execute codeconvert clean");
+        .expect("Failed to execute refmt clean");
 
     assert!(output.status.success());
 
@@ -422,7 +422,7 @@ fn test_cli_clean_extension_filtering() {
 
 #[test]
 fn test_cli_clean_no_changes_needed() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_clean_no_changes");
+    let test_dir = std::env::temp_dir().join("refmt_test_clean_no_changes");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.txt");
@@ -432,7 +432,7 @@ fn test_cli_clean_no_changes_needed() {
         .args(&["clean"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert clean");
+        .expect("Failed to execute refmt clean");
 
     assert!(output.status.success());
 
@@ -447,7 +447,7 @@ fn test_cli_clean_help() {
     let output = Command::new(get_binary_path())
         .args(&["clean", "--help"])
         .output()
-        .expect("Failed to execute codeconvert clean --help");
+        .expect("Failed to execute refmt clean --help");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -456,7 +456,7 @@ fn test_cli_clean_help() {
 
 #[test]
 fn test_cli_convert_subcommand() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_convert_subcommand");
+    let test_dir = std::env::temp_dir().join("refmt_test_convert_subcommand");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -466,7 +466,7 @@ fn test_cli_convert_subcommand() {
         .args(&["convert", "--from-camel", "--to-snake"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert convert");
+        .expect("Failed to execute refmt convert");
 
     assert!(output.status.success());
 
@@ -480,7 +480,7 @@ fn test_cli_convert_subcommand() {
 
 #[test]
 fn test_cli_rename_lowercase() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_lowercase");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_lowercase");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("TestFile.txt");
@@ -490,7 +490,7 @@ fn test_cli_rename_lowercase() {
         .args(&["rename_files", "--to-lowercase"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
 
@@ -507,7 +507,7 @@ fn test_cli_rename_lowercase() {
 
 #[test]
 fn test_cli_rename_uppercase() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_uppercase");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_uppercase");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("testfile.txt");
@@ -517,7 +517,7 @@ fn test_cli_rename_uppercase() {
         .args(&["rename_files", "--to-uppercase"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
 
@@ -534,7 +534,7 @@ fn test_cli_rename_uppercase() {
 
 #[test]
 fn test_cli_rename_capitalize() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_capitalize");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_capitalize");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("testFile.txt");
@@ -544,7 +544,7 @@ fn test_cli_rename_capitalize() {
         .args(&["rename_files", "--to-capitalize"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
 
@@ -561,7 +561,7 @@ fn test_cli_rename_capitalize() {
 
 #[test]
 fn test_cli_rename_to_underscore() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_underscore");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_underscore");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test file.txt");
@@ -571,7 +571,7 @@ fn test_cli_rename_to_underscore() {
         .args(&["rename_files", "--underscored"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
     assert!(test_dir.join("test_file.txt").exists());
@@ -582,7 +582,7 @@ fn test_cli_rename_to_underscore() {
 
 #[test]
 fn test_cli_rename_to_hyphen() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_hyphen");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_hyphen");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test file.txt");
@@ -592,7 +592,7 @@ fn test_cli_rename_to_hyphen() {
         .args(&["rename_files", "--hyphenated"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
     assert!(test_dir.join("test-file.txt").exists());
@@ -603,7 +603,7 @@ fn test_cli_rename_to_hyphen() {
 
 #[test]
 fn test_cli_rename_add_prefix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_add_prefix");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_add_prefix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("file.txt");
@@ -613,7 +613,7 @@ fn test_cli_rename_add_prefix() {
         .args(&["rename_files", "--add-prefix", "new_"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
     assert!(test_dir.join("new_file.txt").exists());
@@ -624,7 +624,7 @@ fn test_cli_rename_add_prefix() {
 
 #[test]
 fn test_cli_rename_rm_prefix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_rm_prefix");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_rm_prefix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("old_file.txt");
@@ -634,7 +634,7 @@ fn test_cli_rename_rm_prefix() {
         .args(&["rename_files", "--rm-prefix", "old_"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
     assert!(test_dir.join("file.txt").exists());
@@ -645,7 +645,7 @@ fn test_cli_rename_rm_prefix() {
 
 #[test]
 fn test_cli_rename_add_suffix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_add_suffix");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_add_suffix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("file.txt");
@@ -655,7 +655,7 @@ fn test_cli_rename_add_suffix() {
         .args(&["rename_files", "--add-suffix", "_backup"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
     assert!(test_dir.join("file_backup.txt").exists());
@@ -666,7 +666,7 @@ fn test_cli_rename_add_suffix() {
 
 #[test]
 fn test_cli_rename_rm_suffix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_rm_suffix");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_rm_suffix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("file_old.txt");
@@ -676,7 +676,7 @@ fn test_cli_rename_rm_suffix() {
         .args(&["rename_files", "--rm-suffix", "_old"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
     assert!(test_dir.join("file.txt").exists());
@@ -687,7 +687,7 @@ fn test_cli_rename_rm_suffix() {
 
 #[test]
 fn test_cli_rename_combined() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_combined");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_combined");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("old_Test File.txt");
@@ -705,7 +705,7 @@ fn test_cli_rename_combined() {
         ])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
     assert!(test_dir.join("test_file_new.txt").exists());
@@ -716,7 +716,7 @@ fn test_cli_rename_combined() {
 
 #[test]
 fn test_cli_rename_dry_run() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_dry");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_dry");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("TestFile.txt");
@@ -727,7 +727,7 @@ fn test_cli_rename_dry_run() {
         .args(&["rename_files", "--to-lowercase", "--dry-run"])
         .arg(&test_file)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
 
@@ -744,7 +744,7 @@ fn test_cli_rename_dry_run() {
 
 #[test]
 fn test_cli_rename_recursive() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_rename_recursive");
+    let test_dir = std::env::temp_dir().join("refmt_test_rename_recursive");
     fs::create_dir_all(&test_dir).unwrap();
 
     let sub_dir = test_dir.join("subdir");
@@ -760,7 +760,7 @@ fn test_cli_rename_recursive() {
         .args(&["rename_files", "--to-lowercase", "-r"])
         .arg(&test_dir)
         .output()
-        .expect("Failed to execute codeconvert rename");
+        .expect("Failed to execute refmt rename");
 
     assert!(output.status.success());
     assert!(test_dir.join("file1.txt").exists());
@@ -774,7 +774,7 @@ fn test_cli_rename_help() {
     let output = Command::new(get_binary_path())
         .args(&["rename_files", "--help"])
         .output()
-        .expect("Failed to execute codeconvert rename --help");
+        .expect("Failed to execute refmt rename --help");
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);

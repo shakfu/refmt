@@ -1,12 +1,12 @@
-//! Integration tests for using codeconvert as a library
+//! Integration tests for using refmt as a library
 
-use codeconvert_core::{CaseConverter, CaseFormat};
+use refmt_core::{CaseConverter, CaseFormat};
 use std::fs;
 
 #[test]
 fn test_library_basic_conversion() {
     // Create a temporary test file
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_basic");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_basic");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -46,7 +46,7 @@ fn test_library_basic_conversion() {
 
 #[test]
 fn test_library_with_prefix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_prefix");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_prefix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.js");
@@ -80,7 +80,7 @@ fn test_library_with_prefix() {
 
 #[test]
 fn test_library_with_suffix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_suffix");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_suffix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.ts");
@@ -114,7 +114,7 @@ fn test_library_with_suffix() {
 
 #[test]
 fn test_library_dry_run() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_dry");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_dry");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -150,7 +150,7 @@ fn test_library_dry_run() {
 
 #[test]
 fn test_library_recursive() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_recursive");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_recursive");
     fs::create_dir_all(&test_dir).unwrap();
 
     // Create nested structure
@@ -195,7 +195,7 @@ fn test_library_recursive() {
 
 #[test]
 fn test_library_word_filter() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_filter");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_filter");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -246,7 +246,7 @@ fn test_library_all_case_formats() {
     ];
 
     for (idx, (from, to, input, expected)) in test_cases.iter().enumerate() {
-        let test_dir = std::env::temp_dir().join(format!("codeconvert_test_lib_formats_{}", idx));
+        let test_dir = std::env::temp_dir().join(format!("refmt_test_lib_formats_{}", idx));
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -281,7 +281,7 @@ fn test_library_all_case_formats() {
 
 #[test]
 fn test_library_strip_prefix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_strip_prefix");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_strip_prefix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.cpp");
@@ -319,7 +319,7 @@ fn test_library_strip_prefix() {
 
 #[test]
 fn test_library_strip_suffix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_strip_suffix");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_strip_suffix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -357,7 +357,7 @@ fn test_library_strip_suffix() {
 
 #[test]
 fn test_library_replace_prefix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_replace_prefix");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_replace_prefix");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.java");
@@ -395,7 +395,7 @@ fn test_library_replace_prefix() {
 
 #[test]
 fn test_library_strip_and_add_prefix() {
-    let test_dir = std::env::temp_dir().join("codeconvert_test_lib_strip_and_add");
+    let test_dir = std::env::temp_dir().join("refmt_test_lib_strip_and_add");
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.c");

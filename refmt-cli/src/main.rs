@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
-use codeconvert_core::{
+use refmt_core::{
     CaseConverter, CaseFormat, CaseTransform, EmojiOptions, EmojiTransformer, FileRenamer,
-    RenameOptions, SpaceReplace, WhitespaceCleaner, WhitespaceOptions,
+    RenameOptions, SpaceReplace, TimestampFormat, WhitespaceCleaner, WhitespaceOptions,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, error, info};
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "codeconvert",
+    name = "refmt",
     version = "0.2.0",
     about = "Code transformation tool for case conversion and cleaning",
     long_about = "A modular code transformation framework.\n\n\
@@ -241,6 +241,14 @@ enum Commands {
         /// Remove suffix from filename (before extension)
         #[arg(long = "rm-suffix")]
         rm_suffix: Option<String>,
+
+        /// Add timestamp prefix in YYYYMMDD format (e.g., 20250915_)
+        #[arg(long = "timestamp-long")]
+        timestamp_long: bool,
+
+        /// Add timestamp prefix in YYMMDD format (e.g., 250915_)
+        #[arg(long = "timestamp-short")]
+        timestamp_short: bool,
     },
 }
 
@@ -541,6 +549,8 @@ fn run_rename(
     rm_prefix: Option<String>,
     add_suffix: Option<String>,
     rm_suffix: Option<String>,
+    timestamp_long: bool,
+    timestamp_short: bool,
 ) -> anyhow::Result<()> {
     info!("Renaming files in: {}", path.display());
     info!("Recursive: {}, Dry run: {}", recursive, dry_run);
@@ -575,6 +585,15 @@ fn run_rename(
     options.remove_prefix = rm_prefix.clone();
     options.add_suffix = add_suffix.clone();
     options.remove_suffix = rm_suffix.clone();
+
+    // Set timestamp format (only one should be selected)
+    if timestamp_long {
+        options.timestamp_format = TimestampFormat::Long;
+        debug!("Timestamp format: Long (YYYYMMDD)");
+    } else if timestamp_short {
+        options.timestamp_format = TimestampFormat::Short;
+        debug!("Timestamp format: Short (YYMMDD)");
+    }
 
     if let Some(ref prefix) = add_prefix {
         debug!("Add prefix: '{}'", prefix);
@@ -713,6 +732,8 @@ fn main() -> anyhow::Result<()> {
             rm_prefix,
             add_suffix,
             rm_suffix,
+            timestamp_long,
+            timestamp_short,
         } => {
             debug!("Running rename subcommand");
             run_rename(
@@ -728,6 +749,8 @@ fn main() -> anyhow::Result<()> {
                 rm_prefix,
                 add_suffix,
                 rm_suffix,
+                timestamp_long,
+                timestamp_short,
             )
         }
     };

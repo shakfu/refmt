@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_remove_trailing_whitespace() {
-        let test_dir = std::env::temp_dir().join("codeconvert_whitespace_test");
+        let test_dir = std::env::temp_dir().join("refmt_whitespace_test");
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_preserve_line_endings() {
-        let test_dir = std::env::temp_dir().join("codeconvert_whitespace_endings");
+        let test_dir = std::env::temp_dir().join("refmt_whitespace_endings");
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn test_dry_run_mode() {
-        let test_dir = std::env::temp_dir().join("codeconvert_whitespace_dry");
+        let test_dir = std::env::temp_dir().join("refmt_whitespace_dry");
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_skip_hidden_files() {
-        let test_dir = std::env::temp_dir().join("codeconvert_whitespace_hidden");
+        let test_dir = std::env::temp_dir().join("refmt_whitespace_hidden");
         fs::create_dir_all(&test_dir).unwrap();
 
         let hidden_file = test_dir.join(".hidden.txt");
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_file_extension_filtering() {
-        let test_dir = std::env::temp_dir().join("codeconvert_whitespace_ext");
+        let test_dir = std::env::temp_dir().join("refmt_whitespace_ext");
         fs::create_dir_all(&test_dir).unwrap();
 
         let txt_file = test_dir.join("test.txt");
@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn test_recursive_processing() {
-        let test_dir = std::env::temp_dir().join("codeconvert_whitespace_recursive");
+        let test_dir = std::env::temp_dir().join("refmt_whitespace_recursive");
         fs::create_dir_all(&test_dir).unwrap();
 
         let sub_dir = test_dir.join("subdir");

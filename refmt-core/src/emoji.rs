@@ -163,7 +163,7 @@ impl EmojiTransformer {
             "\u{274E}" => "[X]",      // ❎ -> [X]
             "\u{26A0}" => "[!]",      // ⚠ -> [!]
             "\u{26D4}" => "[!]",      // ⛔ -> [!]
-            "\u{2B50}" => "[*]",      // ⭐ -> [*]
+            "\u{2B50}" => "[+]",      // ⭐ -> [+]
             "\u{1F7E1}" => "[o]",     // 🟡 -> [o]
             "\u{1F4DD}" => "[note]",  // 📝 -> [note]
             "\u{1F4CB}" => "[list]",  // 📋 -> [list]
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_replace_task_emojis() {
-        let test_dir = std::env::temp_dir().join("codeconvert_emoji_test");
+        let test_dir = std::env::temp_dir().join("refmt_emoji_test");
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.md");
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_checkmark_replacement() {
-        let test_dir = std::env::temp_dir().join("codeconvert_emoji_checkmark");
+        let test_dir = std::env::temp_dir().join("refmt_emoji_checkmark");
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn test_dry_run_mode() {
-        let test_dir = std::env::temp_dir().join("codeconvert_emoji_dry");
+        let test_dir = std::env::temp_dir().join("refmt_emoji_dry");
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn test_skip_hidden_files() {
-        let test_dir = std::env::temp_dir().join("codeconvert_emoji_hidden");
+        let test_dir = std::env::temp_dir().join("refmt_emoji_hidden");
         fs::create_dir_all(&test_dir).unwrap();
 
         let hidden_file = test_dir.join(".hidden.txt");
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_extension_filtering() {
-        let test_dir = std::env::temp_dir().join("codeconvert_emoji_ext");
+        let test_dir = std::env::temp_dir().join("refmt_emoji_ext");
         fs::create_dir_all(&test_dir).unwrap();
 
         let md_file = test_dir.join("test.md");
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_recursive_processing() {
-        let test_dir = std::env::temp_dir().join("codeconvert_emoji_recursive");
+        let test_dir = std::env::temp_dir().join("refmt_emoji_recursive");
         fs::create_dir_all(&test_dir).unwrap();
 
         let sub_dir = test_dir.join("subdir");
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_star_and_circle_replacement() {
-        let test_dir = std::env::temp_dir().join("codeconvert_emoji_star_circle");
+        let test_dir = std::env::temp_dir().join("refmt_emoji_star_circle");
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.md");
@@ -427,7 +427,7 @@ mod tests {
 
         if files > 0 {
             let content = fs::read_to_string(&test_file).unwrap();
-            assert!(content.contains("[*]"), "Star emoji should be replaced with [*]");
+            assert!(content.contains("[+]"), "Star emoji should be replaced with [+]");
             assert!(content.contains("[o]"), "Yellow circle should be replaced with [o]");
             assert!(!content.contains("⭐"), "Star emoji should be removed");
             assert!(!content.contains("🟡"), "Yellow circle should be removed");

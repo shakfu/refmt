@@ -1,11 +1,11 @@
 [package]
-name = "codeconvert-plugins"
+name = "refmt-plugins"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Plugin system for codeconvert transformers"
+description = "Plugin system for refmt transformers"
 
 [dependencies]
 anyhow.workspace = true

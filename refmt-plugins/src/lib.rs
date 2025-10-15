@@ -1,4 +1,4 @@
-//! Plugin system for codeconvert transformers
+//! Plugin system for refmt transformers
 //!
 //! This crate provides the foundation for loading and managing
 //! custom transformation plugins.

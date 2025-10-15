@@ -1,17 +1,17 @@
 [workspace]
 members = [
-    "codeconvert-core",
-    "codeconvert-cli",
-    "codeconvert-plugins",
+    "refmt-core",
+    "refmt-cli",
+    "refmt-plugins",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.2.2"
 edition = "2021"
-authors = ["CodeConvert Contributors"]
+authors = ["refmt Contributors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/yourusername/codeconvert"
+repository = "https://github.com/yourusername/refmt"
 
 [workspace.dependencies]
 # Shared dependencies across workspace

@@ -13,7 +13,7 @@ pub mod whitespace;
 pub use case::CaseFormat;
 pub use converter::CaseConverter;
 pub use emoji::{EmojiOptions, EmojiTransformer};
-pub use rename::{CaseTransform, FileRenamer, RenameOptions, SpaceReplace};
+pub use rename::{CaseTransform, FileRenamer, RenameOptions, SpaceReplace, TimestampFormat};
 pub use whitespace::{WhitespaceCleaner, WhitespaceOptions};
 
 // Re-export Result type

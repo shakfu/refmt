@@ -120,41 +120,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
-name = "codeconvert"
-version = "0.2.2"
-dependencies = [
- "anyhow",
- "clap",
- "codeconvert-core",
- "codeconvert-plugins",
- "indicatif",
- "log",
- "logging_timer",
- "simplelog",
-]
-
-[[package]]
-name = "codeconvert-core"
-version = "0.2.2"
-dependencies = [
- "anyhow",
- "glob",
- "rayon",
- "regex",
- "thiserror",
- "walkdir",
-]
-
-[[package]]
-name = "codeconvert-plugins"
-version = "0.2.2"
-dependencies = [
- "anyhow",
- "serde",
- "thiserror",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -387,6 +352,41 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "refmt"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "indicatif",
+ "log",
+ "logging_timer",
+ "refmt-core",
+ "refmt-plugins",
+ "simplelog",
+]
+
+[[package]]
+name = "refmt-core"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "glob",
+ "rayon",
+ "regex",
+ "thiserror",
+ "walkdir",
+]
+
+[[package]]
+name = "refmt-plugins"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

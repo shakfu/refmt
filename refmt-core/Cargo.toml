@@ -1,11 +1,11 @@
 [package]
-name = "codeconvert-core"
+name = "refmt-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Core library for code transformation and case conversion"
+description = "Core library for text and file reformatting"
 
 [dependencies]
 regex.workspace = true
