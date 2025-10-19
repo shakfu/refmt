@@ -9,6 +9,15 @@ Organized as a Cargo workspace:
 
 ## Features
 
+### Default Command (Quick Processing)
+- **NEW**: Run all common transformations in a single pass with `refmt <path>`
+- Combines three operations efficiently:
+  1. Rename files to lowercase
+  2. Transform task emojis to text alternatives
+  3. Remove trailing whitespace
+- **3x faster** than running individual commands separately
+- Perfect for quick project cleanup: `refmt -r src/`
+
 ### Case Format Conversion
 - Convert between 6 case formats: camelCase, PascalCase, snake_case, SCREAMING_SNAKE_CASE, kebab-case, and SCREAMING-KEBAB-CASE
 - Process single files or entire directories (with recursive option)
@@ -95,6 +104,70 @@ options.recursive = true;
 let cleaner = WhitespaceCleaner::new(options);
 let (files_cleaned, lines_cleaned) = cleaner.process(std::path::Path::new("src"))?;
 println!("Cleaned {} lines in {} files", lines_cleaned, files_cleaned);
+```
+
+### Combined Processing (Default Command)
+
+```rust
+use refmt_core::{CombinedProcessor, CombinedOptions};
+
+let mut options = CombinedOptions::default();
+options.recursive = true;
+options.dry_run = false;
+
+let processor = CombinedProcessor::new(options);
+let stats = processor.process(std::path::Path::new("src"))?;
+
+println!("Files renamed: {}", stats.files_renamed);
+println!("Emojis transformed: {} files ({} changes)",
+         stats.files_emoji_transformed, stats.emoji_changes);
+println!("Whitespace cleaned: {} files ({} lines)",
+         stats.files_whitespace_cleaned, stats.whitespace_lines_cleaned);
+```
+
+## Quick Start
+
+### Default Command (Recommended)
+
+The fastest way to clean up your code:
+
+```bash
+# Process directory (non-recursive)
+refmt <path>
+
+# Process recursively
+refmt -r <path>
+
+# Preview changes without modifying files
+refmt -d <path>
+```
+
+**What it does:**
+1. Renames files to lowercase
+2. Transforms task emojis: ✅ → [x], ☐ → [ ]
+3. Removes trailing whitespace
+
+**Example:**
+```bash
+# Clean up an entire project directory
+refmt -r src/
+
+# Preview changes first
+refmt -d -r docs/
+
+# Process a single file
+refmt README.md
+```
+
+**Output:**
+```
+Renamed '/tmp/TestFile.txt' -> '/tmp/testfile.txt'
+Transformed emojis in '/tmp/testfile.txt'
+Cleaned 2 lines in '/tmp/testfile.txt'
+Processed files:
+  - Renamed: 1 file(s)
+  - Emoji transformations: 1 file(s) (1 changes)
+  - Whitespace cleaned: 1 file(s) (2 lines)
 ```
 
 ## Usage

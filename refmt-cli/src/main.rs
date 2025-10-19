@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use refmt_core::{
-    CaseConverter, CaseFormat, CaseTransform, EmojiOptions, EmojiTransformer, FileRenamer,
-    RenameOptions, SpaceReplace, TimestampFormat, WhitespaceCleaner, WhitespaceOptions,
+    CaseConverter, CaseFormat, CaseTransform, CombinedOptions, CombinedProcessor, EmojiOptions,
+    EmojiTransformer, FileRenamer, RenameOptions, SpaceReplace, TimestampFormat,
+    WhitespaceCleaner, WhitespaceOptions,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, error, info};
@@ -15,6 +16,9 @@ use std::path::PathBuf;
     version = "0.2.0",
     about = "Code transformation tool for case conversion and cleaning",
     long_about = "A modular code transformation framework.\n\n\
+                  Usage:\n\
+                  - refmt <path>: Run all transformations (rename to lowercase, emojis, clean)\n\
+                  - refmt -r <path>: Run all transformations recursively\n\n\
                   Commands:\n\
                   - convert: Convert between case formats\n\
                   - clean: Remove trailing whitespace\n\
@@ -23,7 +27,19 @@ use std::path::PathBuf;
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
+
+    /// The directory or file to process (when no subcommand is specified)
+    #[arg(value_name = "PATH")]
+    path: Option<PathBuf>,
+
+    /// Process files recursively (when no subcommand is specified)
+    #[arg(short = 'r', long, requires = "path")]
+    recursive: bool,
+
+    /// Dry run (don't modify files, when no subcommand is specified)
+    #[arg(short = 'd', long = "dry-run", requires = "path")]
+    dry_run: bool,
 
     /// Enable verbose output (can be used multiple times: -v, -vv, -vvv)
     #[arg(short = 'v', long = "verbose", global = true, action = clap::ArgAction::Count)]
@@ -627,6 +643,61 @@ fn run_rename(
     Ok(())
 }
 
+#[time("info")]
+fn run_combined(path: PathBuf, recursive: bool, dry_run: bool) -> anyhow::Result<()> {
+    info!("Running combined transformations on: {}", path.display());
+    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
+
+    let mut options = CombinedOptions::default();
+    options.recursive = recursive;
+    options.dry_run = dry_run;
+
+    let spinner = create_spinner("Processing files (rename, emojis, clean)...");
+
+    let processor = CombinedProcessor::new(options);
+    let stats = processor.process(&path)?;
+
+    spinner.finish_and_clear();
+
+    let prefix = if dry_run { "[DRY-RUN] " } else { "" };
+
+    // Print summary
+    if stats.files_renamed > 0
+        || stats.files_emoji_transformed > 0
+        || stats.files_whitespace_cleaned > 0
+    {
+        info!(
+            "{}Combined processing complete: {} renamed, {} emoji-transformed ({} changes), {} whitespace-cleaned ({} lines)",
+            prefix, stats.files_renamed, stats.files_emoji_transformed, stats.emoji_changes,
+            stats.files_whitespace_cleaned, stats.whitespace_lines_cleaned
+        );
+        println!(
+            "{}Processed files:",
+            prefix
+        );
+        if stats.files_renamed > 0 {
+            println!("  - Renamed: {} file(s)", stats.files_renamed);
+        }
+        if stats.files_emoji_transformed > 0 {
+            println!(
+                "  - Emoji transformations: {} file(s) ({} changes)",
+                stats.files_emoji_transformed, stats.emoji_changes
+            );
+        }
+        if stats.files_whitespace_cleaned > 0 {
+            println!(
+                "  - Whitespace cleaned: {} file(s) ({} lines)",
+                stats.files_whitespace_cleaned, stats.whitespace_lines_cleaned
+            );
+        }
+    } else {
+        info!("No files needed processing");
+        println!("No files needed processing");
+    }
+
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -638,36 +709,20 @@ fn main() -> anyhow::Result<()> {
     debug!("CLI arguments parsed successfully");
 
     let result = match cli.command {
-        Commands::Convert {
-            from_camel,
-            from_pascal,
-            from_snake,
-            from_screaming_snake,
-            from_kebab,
-            from_screaming_kebab,
-            to_camel,
-            to_pascal,
-            to_snake,
-            to_screaming_snake,
-            to_kebab,
-            to_screaming_kebab,
-            path,
-            recursive,
-            dry_run,
-            extensions,
-            prefix,
-            suffix,
-            strip_prefix,
-            strip_suffix,
-            replace_prefix_from,
-            replace_prefix_to,
-            replace_suffix_from,
-            replace_suffix_to,
-            glob,
-            word_filter,
-        } => {
-            debug!("Running convert subcommand");
-            run_convert(
+        None => {
+            // Default command: run combined processing
+            if let Some(path) = cli.path {
+                debug!("Running combined processing (default command)");
+                run_combined(path, cli.recursive, cli.dry_run)
+            } else {
+                // Neither command nor path specified - print help
+                error!("No command or path specified. Use --help for usage information.");
+                std::process::exit(1);
+            }
+        }
+
+        Some(cmd) => match cmd {
+            Commands::Convert {
                 from_camel,
                 from_pascal,
                 from_snake,
@@ -694,49 +749,61 @@ fn main() -> anyhow::Result<()> {
                 replace_suffix_to,
                 glob,
                 word_filter,
-            )
-        }
+            } => {
+                debug!("Running convert subcommand");
+                run_convert(
+                    from_camel,
+                    from_pascal,
+                    from_snake,
+                    from_screaming_snake,
+                    from_kebab,
+                    from_screaming_kebab,
+                    to_camel,
+                    to_pascal,
+                    to_snake,
+                    to_screaming_snake,
+                    to_kebab,
+                    to_screaming_kebab,
+                    path,
+                    recursive,
+                    dry_run,
+                    extensions,
+                    prefix,
+                    suffix,
+                    strip_prefix,
+                    strip_suffix,
+                    replace_prefix_from,
+                    replace_prefix_to,
+                    replace_suffix_from,
+                    replace_suffix_to,
+                    glob,
+                    word_filter,
+                )
+            }
 
-        Commands::Clean {
-            path,
-            recursive,
-            dry_run,
-            extensions,
-        } => {
-            debug!("Running clean subcommand");
-            run_clean(path, recursive, dry_run, extensions)
-        }
+            Commands::Clean {
+                path,
+                recursive,
+                dry_run,
+                extensions,
+            } => {
+                debug!("Running clean subcommand");
+                run_clean(path, recursive, dry_run, extensions)
+            }
 
-        Commands::Emojis {
-            path,
-            recursive,
-            dry_run,
-            extensions,
-            replace_task,
-            remove_other,
-        } => {
-            debug!("Running emojis subcommand");
-            run_emojis(path, recursive, dry_run, extensions, replace_task, remove_other)
-        }
+            Commands::Emojis {
+                path,
+                recursive,
+                dry_run,
+                extensions,
+                replace_task,
+                remove_other,
+            } => {
+                debug!("Running emojis subcommand");
+                run_emojis(path, recursive, dry_run, extensions, replace_task, remove_other)
+            }
 
-        Commands::RenameFiles {
-            path,
-            recursive,
-            dry_run,
-            to_lowercase,
-            to_uppercase,
-            to_capitalize,
-            underscored,
-            hyphenated,
-            add_prefix,
-            rm_prefix,
-            add_suffix,
-            rm_suffix,
-            timestamp_long,
-            timestamp_short,
-        } => {
-            debug!("Running rename subcommand");
-            run_rename(
+            Commands::RenameFiles {
                 path,
                 recursive,
                 dry_run,
@@ -751,7 +818,25 @@ fn main() -> anyhow::Result<()> {
                 rm_suffix,
                 timestamp_long,
                 timestamp_short,
-            )
+            } => {
+                debug!("Running rename subcommand");
+                run_rename(
+                    path,
+                    recursive,
+                    dry_run,
+                    to_lowercase,
+                    to_uppercase,
+                    to_capitalize,
+                    underscored,
+                    hyphenated,
+                    add_prefix,
+                    rm_prefix,
+                    add_suffix,
+                    rm_suffix,
+                    timestamp_long,
+                    timestamp_short,
+                )
+            }
         }
     };
 

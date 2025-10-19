@@ -780,3 +780,146 @@ fn test_cli_rename_help() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Rename files"));
 }
+
+// Combined default command tests
+#[test]
+fn test_cli_combined_default() {
+    let test_dir = std::env::temp_dir().join("refmt_test_combined_default");
+    let _ = fs::remove_dir_all(&test_dir);
+    fs::create_dir_all(&test_dir).unwrap();
+
+    // Create a file with uppercase name, emojis, and trailing whitespace
+    let test_file = test_dir.join("TestFile.txt");
+    fs::write(&test_file, "Line 1   \nTask ✅ done\nLine 3\t\n").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute refmt (default command)");
+
+    assert!(output.status.success());
+
+    // File should be renamed to lowercase
+    let renamed_file = test_dir.join("testfile.txt");
+    assert!(renamed_file.exists(), "File should be renamed to lowercase");
+
+    // On case-insensitive filesystems (like macOS default), TestFile.txt and testfile.txt
+    // refer to the same file. Check that the actual filename on disk is lowercase.
+    let entries: Vec<_> = fs::read_dir(&test_dir).unwrap().collect();
+    assert_eq!(entries.len(), 1, "Should have exactly one file");
+    let actual_name = entries[0].as_ref().unwrap().file_name();
+    assert_eq!(actual_name.to_str().unwrap(), "testfile.txt", "Filename should be lowercase");
+
+    // Check content transformations
+    let content = fs::read_to_string(&renamed_file).unwrap();
+
+    // Emoji should be transformed
+    assert!(content.contains("[x]"), "Emoji should be replaced with [x]");
+    assert!(!content.contains("✅"), "Original emoji should not be present");
+
+    // Whitespace should be cleaned
+    assert!(!content.contains("   \n"), "Trailing spaces should be removed");
+    assert!(!content.contains("\t\n"), "Trailing tabs should be removed");
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_combined_recursive() {
+    let test_dir = std::env::temp_dir().join("refmt_test_combined_recursive");
+    let _ = fs::remove_dir_all(&test_dir);
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let sub_dir = test_dir.join("subdir");
+    fs::create_dir_all(&sub_dir).unwrap();
+
+    let file1 = test_dir.join("File1.txt");
+    let file2 = sub_dir.join("File2.md");
+
+    fs::write(&file1, "Text   \n✅ Done\n").unwrap();
+    fs::write(&file2, "More text\t\n☐ Todo\n").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["-r"])
+        .arg(&test_dir)
+        .output()
+        .expect("Failed to execute refmt -r");
+
+    assert!(output.status.success());
+
+    // Both files should be renamed
+    assert!(test_dir.join("file1.txt").exists());
+    assert!(sub_dir.join("file2.md").exists());
+
+    // Check content transformations for file1
+    let content1 = fs::read_to_string(&test_dir.join("file1.txt")).unwrap();
+    assert!(content1.contains("[x]"));
+    assert!(!content1.contains("✅"));
+    assert!(!content1.contains("   \n"));
+
+    // Check content transformations for file2
+    let content2 = fs::read_to_string(&sub_dir.join("file2.md")).unwrap();
+    assert!(content2.contains("[ ]"));
+    assert!(!content2.contains("☐"));
+    assert!(!content2.contains("\t\n"));
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_combined_dry_run() {
+    let test_dir = std::env::temp_dir().join("refmt_test_combined_dry");
+    let _ = fs::remove_dir_all(&test_dir);
+    fs::create_dir_all(&test_dir).unwrap();
+
+    let test_file = test_dir.join("TestFile.txt");
+    let original_content = "Line 1   \nTask ✅\n";
+    fs::write(&test_file, original_content).unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(&["--dry-run"])
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute refmt --dry-run");
+
+    assert!(output.status.success());
+
+    // File should remain unchanged
+    assert!(test_file.exists());
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(content, original_content);
+
+    // Output should indicate dry-run mode
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[DRY-RUN]") || stdout.contains("Would"));
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}
+
+#[test]
+fn test_cli_combined_no_changes_needed() {
+    let test_dir = std::env::temp_dir().join("refmt_test_combined_nochange");
+    let _ = fs::remove_dir_all(&test_dir);
+    fs::create_dir_all(&test_dir).unwrap();
+
+    // Create a file that already meets all criteria
+    let test_file = test_dir.join("testfile.txt");
+    fs::write(&test_file, "Line 1\nLine 2\n").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute refmt (default command)");
+
+    assert!(output.status.success());
+
+    // File should still exist with same content
+    assert!(test_file.exists());
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(content, "Line 1\nLine 2\n");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("No files needed processing"));
+
+    fs::remove_dir_all(&test_dir).unwrap();
+}

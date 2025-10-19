@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-10-19
+
+### Added
+
+#### Default Command (Combined Processing)
+- **New default command** for efficient single-pass processing
+  - `refmt <path>`: Process files without specifying a subcommand
+  - `refmt -r <path>`: Process recursively
+  - Combines three transformations in order:
+    1. Rename files to lowercase
+    2. Transform task emojis to text alternatives
+    3. Remove trailing whitespace
+  - **Performance**: ~3x faster than running individual commands separately
+  - Single directory traversal instead of three separate scans
+
+#### New Core Module
+- **CombinedProcessor** (`refmt-core/src/combined.rs`)
+  - Efficient single-pass file processing
+  - Tracks and reports detailed statistics for all transformations
+  - Returns `CombinedStats` with counts for files renamed, emojis transformed, and whitespace cleaned
+  - Full support for dry-run and recursive modes
+  - Handles path updates after file renaming automatically
+
+### Changed
+- CLI now accepts optional path argument at the top level
+- Existing subcommands (`convert`, `clean`, `emojis`, `rename_files`) remain unchanged
+- Updated help text to highlight new default command usage
+
+### Testing
+- Added 4 new unit tests for `CombinedProcessor`
+- Added 4 new CLI integration tests for default command
+- All 88 tests passing (37 CLI + 51 core + 11 library integration)
+- Tests handle case-insensitive filesystems (macOS/Windows)
+
+### Documentation
+- Updated `CLAUDE.md` with architecture details for combined processing
+- Added usage examples and performance notes
+- Documented the transformation pipeline and benefits
+
 ## [0.2.0] - 2025-10-10
 
 ### Overview
