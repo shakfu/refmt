@@ -67,6 +67,7 @@ impl EmojiTransformer {
             [\u26A0]|          # Warning sign (⚠)
             [\u26D4]|          # No entry (⛔)
             [\u2B50]|          # Star (⭐)
+            [\u{1F7E0}]|       # Orange circle (🟠)
             [\u{1F7E1}]|       # Yellow circle (🟡)
             [\u{1F7E2}]|       # Green circle (🟢)
             [\u{1F534}]|       # Red circle (🔴)
@@ -166,6 +167,7 @@ impl EmojiTransformer {
             "\u{26A0}" => "[!]",      // ⚠ -> [!]
             "\u{26D4}" => "[!]",      // ⛔ -> [!]
             "\u{2B50}" => "[+]",      // ⭐ -> [+]
+            "\u{1F7E0}" => "[orange]", // 🟠 -> [orange]
             "\u{1F7E1}" => "[yellow]", // 🟡 -> [yellow]
             "\u{1F7E2}" => "[green]",  // 🟢 -> [green]
             "\u{1F534}" => "[red]",    // 🔴 -> [red]
