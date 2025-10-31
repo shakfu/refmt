@@ -69,6 +69,7 @@ impl EmojiTransformer {
             [\u2B50]|          # Star (⭐)
             [\u{1F7E0}]|       # Orange circle (🟠)
             [\u{1F7E1}]|       # Yellow circle (🟡)
+            [\u{1F7E8}]|       # Yellow square (🟨)
             [\u{1F7E2}]|       # Green circle (🟢)
             [\u{1F534}]|       # Red circle (🔴)
             [\u{1F4DD}]|       # Memo (📝)
@@ -169,6 +170,7 @@ impl EmojiTransformer {
             "\u{2B50}" => "[+]",      // ⭐ -> [+]
             "\u{1F7E0}" => "[orange]", // 🟠 -> [orange]
             "\u{1F7E1}" => "[yellow]", // 🟡 -> [yellow]
+            "\u{1F7E8}" => "[yellow]", // 🟨 -> [yellow]
             "\u{1F7E2}" => "[green]",  // 🟢 -> [green]
             "\u{1F534}" => "[red]",    // 🔴 -> [red]
             "\u{1F4DD}" => "[note]",  // 📝 -> [note]
@@ -441,6 +443,27 @@ mod tests {
             assert!(!content.contains("🟡"), "Yellow circle should be removed");
             assert!(!content.contains("🟢"), "Green circle should be removed");
             assert!(!content.contains("🔴"), "Red circle should be removed");
+        }
+
+        fs::remove_dir_all(&test_dir).unwrap();
+    }
+
+    #[test]
+    fn test_yellow_square_replacement() {
+        let test_dir = std::env::temp_dir().join("refmt_emoji_yellow_square");
+        fs::create_dir_all(&test_dir).unwrap();
+
+        let test_file = test_dir.join("test.md");
+        fs::write(&test_file, "🟨 In progress task\n🟡 Another yellow\n").unwrap();
+
+        let transformer = EmojiTransformer::with_defaults();
+        let (files, _) = transformer.process(&test_file).unwrap();
+
+        if files > 0 {
+            let content = fs::read_to_string(&test_file).unwrap();
+            assert!(content.contains("[yellow]"), "Yellow square should be replaced with [yellow]");
+            assert!(!content.contains("🟨"), "Yellow square emoji should be removed");
+            assert!(!content.contains("🟡"), "Yellow circle emoji should be removed");
         }
 
         fs::remove_dir_all(&test_dir).unwrap();
