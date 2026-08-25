@@ -390,7 +390,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "reformat"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "reformat-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "reformat-plugins"
-version = "0.1.7"
+version = "0.1.8"
 
 [[package]]
 name = "regex"

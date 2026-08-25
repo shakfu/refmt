@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-08-26
+
+A documentation and metadata release. No behavioural changes.
+
+### Fixed
+
+- The declared minimum supported Rust version now reaches the published
+  crates, and is correct. `rust-version = "1.82"` was set in
+  `[workspace.package]` for 0.1.7 but not inherited by the member manifests, so
+  `cargo metadata` reported no MSRV and the published manifests carried none.
+  Users on an older toolchain got a compile error rather than cargo's clear
+  "requires rustc" message.
+- The value was also wrong. 1.82 was derived from this codebase's own use of
+  `Option::is_none_or` without checking the dependency tree, where
+  `simplelog -> time` requires 1.88. The floors differ per crate and are now
+  declared that way: `reformat-core` and `reformat-plugins` at 1.82, the
+  `reformat` binary at 1.88. Declaring one workspace-wide floor would have
+  pushed library consumers to the CLI's requirement for no reason. CI verifies
+  both.
+
+### Documentation
+
+- Added an upgrade warning to the top of the README. Versions 0.1.4 through
+  0.1.6 did not exclude `.git` when walking a directory, so `rename_files` and
+  the default `reformat -r <path>` could rename files inside it and destroy the
+  repository; those versions have been yanked from crates.io. A yank is silent,
+  so this is what reaches someone already running an affected version. Package
+  pages render the README of the published version, which is why this needs a
+  release to appear on crates.io.
+
 ## [0.1.7] - 2026-08-26
 
 ### Fixed

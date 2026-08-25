@@ -19,7 +19,7 @@ reformat is a modular code transformation framework implemented in Rust. It prov
 
 ```text
 reformat/
-├── Cargo.toml                    # Workspace definition (v0.1.7)
+├── Cargo.toml                    # Workspace definition (v0.1.8)
 ├── reformat-core/                # Core library
 │   ├── Cargo.toml
 │   └── src/
@@ -72,7 +72,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 
 [workspace.dependencies]

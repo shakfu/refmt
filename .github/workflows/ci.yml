@@ -25,15 +25,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
-  # The declared MSRV must actually build, or users on an older toolchain get
-  # a confusing compile error instead of a clear version message.
+  # Each declared MSRV must actually build, or users on an older toolchain get
+  # a confusing compile error instead of a clear version message. The floors
+  # differ: reformat-core is usable from 1.82, but the CLI's dependency tree
+  # (simplelog -> time) needs 1.88. The library check omits --all-targets
+  # because dev-dependencies are not part of a consumer's build.
   msrv:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolchain: "1.82"
+            args: "-p reformat-core -p reformat-plugins"
+          - toolchain: "1.88"
+            args: "--workspace --all-targets"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.82
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-targets
+      - run: cargo check ${{ matrix.args }}
 
   clippy:
     runs-on: ubuntu-latest

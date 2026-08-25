@@ -2,7 +2,8 @@
 name = "reformat"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Higher than the workspace floor: simplelog -> time requires 1.88.
+rust-version = "1.88"
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
