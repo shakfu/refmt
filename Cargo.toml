@@ -7,8 +7,10 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
+# Driven by Option::is_none_or (stable since 1.82).
+rust-version = "1.82"
 authors = ["Shakeeb Alireza"]
 license = "MIT"
 homepage = "https://github.com/shakfu/reformat"
@@ -17,21 +19,23 @@ keywords = ["code", "transform", "rename", "format", "cleanup"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
 
 [workspace.dependencies]
+# Internal crates, versioned in one place so a release bump cannot go stale.
+reformat-core = { path = "reformat-core", version = "0.1.7" }
+reformat-plugins = { path = "reformat-plugins", version = "0.1.7" }
+
 # Shared dependencies across workspace
 regex = "1.11"
 aho-corasick = "1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
-thiserror = "1.0"
 walkdir = "2.5"
 glob = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 
-# Logging and UI
+# Logging
 log = "0.4"
 simplelog = "0.12"
-indicatif = "0.17"
 logging_timer = "1.1"
 
 [profile.release]

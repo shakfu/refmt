@@ -1,8 +1,6 @@
 //! Combined processing for multiple transformations in a single pass
 
-use std::fs;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 use crate::{
     CaseTransform, EmojiOptions, EmojiTransformer, FileRenamer, RenameOptions, WhitespaceCleaner,
@@ -92,34 +90,26 @@ impl CombinedProcessor {
         if path.is_file() {
             self.process_single_file(path, &mut stats)?;
         } else if path.is_dir() {
-            if self.options.recursive {
-                // Collect all files first to avoid iterator invalidation during renames
-                let mut files: Vec<PathBuf> = WalkDir::new(path)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .map(|e| e.path().to_path_buf())
-                    .collect();
+            // Collect every file up front: renaming while iterating would
+            // invalidate the walk. Going through `walk_files` is what prunes
+            // `.git` and friends -- this walked them directly and relied on
+            // each transformer re-checking the whole path.
+            let mut files: Vec<PathBuf> = crate::walk::walk_files(path, self.options.recursive)
+                .map(|e| e.path().to_path_buf())
+                .collect();
 
-                // Sort by depth (deepest first) to avoid parent directory rename issues
-                files.sort_by_key(|b| std::cmp::Reverse(b.components().count()));
+            // Deepest first, then alphabetically: renaming a file cannot then
+            // invalidate a path still queued behind it, and the order is
+            // reproducible.
+            files.sort_by(|a, b| {
+                b.components()
+                    .count()
+                    .cmp(&a.components().count())
+                    .then_with(|| a.cmp(b))
+            });
 
-                for file_path in files {
-                    self.process_single_file(&file_path, &mut stats)?;
-                }
-            } else {
-                let mut files: Vec<PathBuf> = fs::read_dir(path)?
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .filter(|p| p.is_file())
-                    .collect();
-
-                // Sort for consistent processing
-                files.sort();
-
-                for file_path in files {
-                    self.process_single_file(&file_path, &mut stats)?;
-                }
+            for file_path in files {
+                self.process_single_file(&file_path, &mut stats)?;
             }
         }
 
@@ -180,8 +170,11 @@ mod tests {
 
     #[test]
     fn test_combined_processing() {
-        let test_dir = std::env::temp_dir().join("reformat_combined_test");
-        let _ = fs::remove_dir_all(&test_dir);
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         // Create a file with uppercase name, emojis, and trailing whitespace
@@ -206,22 +199,26 @@ mod tests {
         assert_eq!(stats.files_whitespace_cleaned, 1);
         assert!(!content.contains("   \n"));
         assert!(!content.contains("\t\n"));
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_combined_dry_run() {
-        let test_dir = std::env::temp_dir().join("reformat_combined_dry");
-        let _ = fs::remove_dir_all(&test_dir);
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("TestFile.txt");
         let original_content = "Line 1   \nTask ✅\n";
         fs::write(&test_file, original_content).unwrap();
 
-        let mut options = CombinedOptions::default();
-        options.dry_run = true;
+        let options = CombinedOptions {
+            dry_run: true,
+
+            ..Default::default()
+        };
 
         let processor = CombinedProcessor::new(options);
         let _stats = processor.process(&test_file).unwrap();
@@ -230,14 +227,15 @@ mod tests {
         assert!(test_file.exists());
         let content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, original_content);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_combined_recursive() {
-        let test_dir = std::env::temp_dir().join("reformat_combined_recursive");
-        let _ = fs::remove_dir_all(&test_dir);
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let sub_dir = test_dir.join("subdir");
@@ -260,14 +258,15 @@ mod tests {
         // Check renamed files exist
         assert!(test_dir.join("file1.txt").exists());
         assert!(sub_dir.join("file2.md").exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_combined_non_recursive() {
-        let test_dir = std::env::temp_dir().join("reformat_combined_nonrec");
-        let _ = fs::remove_dir_all(&test_dir);
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let sub_dir = test_dir.join("subdir");
@@ -279,8 +278,11 @@ mod tests {
         fs::write(&file1, "Text   \n").unwrap();
         fs::write(&file2, "More   \n").unwrap();
 
-        let mut options = CombinedOptions::default();
-        options.recursive = false;
+        let options = CombinedOptions {
+            recursive: false,
+
+            ..Default::default()
+        };
 
         let processor = CombinedProcessor::new(options);
         let stats = processor.process(&test_dir).unwrap();
@@ -299,7 +301,5 @@ mod tests {
             "File2.txt",
             "Subdirectory file should not be renamed"
         );
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 }

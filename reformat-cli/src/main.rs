@@ -1,15 +1,16 @@
 mod config;
 
 use clap::{Parser, Subcommand};
-use indicatif::{ProgressBar, ProgressStyle};
-use log::{debug, error, info};
+use log::{debug, info, warn};
 use logging_timer::time;
+use reformat_core::config::{
+    CleanConfig, ConvertConfig, EmojiConfig, EndingsConfig, GroupConfig, HeaderConfig,
+    IndentConfig, RenameConfig, ReplaceConfig, ReplacePatternEntry,
+};
 use reformat_core::{
-    CaseConverter, CaseFormat, CaseTransform, CombinedOptions, CombinedProcessor, ContentReplacer,
-    EmojiOptions, EmojiTransformer, EndingsNormalizer, EndingsOptions, FileGrouper, FileRenamer,
-    GroupOptions, HeaderManager, HeaderOptions, IndentNormalizer, IndentOptions, IndentStyle,
-    LineEnding, ReferenceFixer, ReferenceScanner, RenameOptions, ReplaceOptions, ReplacePattern,
-    ScanOptions, SpaceReplace, TimestampFormat, WhitespaceCleaner, WhitespaceOptions,
+    CombinedOptions, CombinedProcessor, ContentReplacer, EmojiTransformer, EndingsNormalizer,
+    FileGrouper, FileRenamer, HeaderManager, IndentNormalizer, ReferenceFixer, ReferenceScanner,
+    ScanOptions, WhitespaceCleaner,
 };
 use simplelog::*;
 use std::io::{self, Write};
@@ -355,6 +356,14 @@ enum Commands {
         /// Show verbose output during reference scanning (useful for debugging hangs)
         #[arg(long = "verbose-scan")]
         verbose_scan: bool,
+
+        /// Where to write the record of moves [default: ./changes.json]
+        #[arg(long = "changes-file")]
+        changes_file: Option<PathBuf>,
+
+        /// Where to write proposed reference fixes [default: ./fixes.json]
+        #[arg(long = "fixes-file")]
+        fixes_file: Option<PathBuf>,
     },
 
     /// Normalize line endings across files
@@ -460,18 +469,32 @@ enum Commands {
 
 /// Initialize logging based on verbosity level
 fn init_logging(verbose: u8, quiet: bool, log_file: Option<PathBuf>) -> anyhow::Result<()> {
+    // Transformers report what they touch at `info`. That is the default
+    // level so ordinary runs look the same as before, and `--quiet` now
+    // actually silences them -- previously they were `println!`d straight from
+    // the library, where no CLI flag could reach them.
     let log_level = if quiet {
         LevelFilter::Error
     } else {
         match verbose {
-            0 => LevelFilter::Warn,
-            1 => LevelFilter::Info,
-            2 => LevelFilter::Debug,
+            0 => LevelFilter::Info,
+            1 => LevelFilter::Debug,
             _ => LevelFilter::Trace,
         }
     };
 
-    let config = ConfigBuilder::new()
+    // Terminal output is undecorated: these are user-facing progress lines,
+    // not diagnostics, so no timestamp, level or target prefix.
+    let term_config = ConfigBuilder::new()
+        .set_time_level(LevelFilter::Off)
+        .set_max_level(LevelFilter::Off)
+        .set_thread_level(LevelFilter::Off)
+        .set_target_level(LevelFilter::Off)
+        .set_location_level(LevelFilter::Off)
+        .build();
+
+    // The log file keeps full detail, timestamps included.
+    let file_config = ConfigBuilder::new()
         .set_time_format_rfc3339()
         .set_thread_level(LevelFilter::Off)
         .set_target_level(LevelFilter::Off)
@@ -479,15 +502,15 @@ fn init_logging(verbose: u8, quiet: bool, log_file: Option<PathBuf>) -> anyhow::
 
     let mut loggers: Vec<Box<dyn SharedLogger>> = vec![TermLogger::new(
         log_level,
-        config.clone(),
+        term_config,
         TerminalMode::Mixed,
         ColorChoice::Auto,
     )];
 
     if let Some(log_path) = log_file {
         let file = std::fs::File::create(&log_path)?;
-        loggers.push(WriteLogger::new(LevelFilter::Debug, config, file));
-        eprintln!("Logging to file: {}", log_path.display());
+        loggers.push(WriteLogger::new(LevelFilter::Debug, file_config, file));
+        warn!("Logging to file: {}", log_path.display());
     }
 
     CombinedLogger::init(loggers)?;
@@ -496,58 +519,45 @@ fn init_logging(verbose: u8, quiet: bool, log_file: Option<PathBuf>) -> anyhow::
     Ok(())
 }
 
-/// Create a progress spinner
-fn create_spinner(message: &str) -> ProgressBar {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap()
-            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-    );
-    spinner.set_message(message.to_string());
-    spinner.enable_steady_tick(std::time::Duration::from_millis(80));
-    spinner
-}
-
-fn determine_case_format(
-    from_camel: bool,
-    from_pascal: bool,
-    from_snake: bool,
-    from_screaming_snake: bool,
-    from_kebab: bool,
-    _from_screaming_kebab: bool,
-) -> CaseFormat {
-    if from_camel {
-        CaseFormat::CamelCase
-    } else if from_pascal {
-        CaseFormat::PascalCase
-    } else if from_snake {
-        CaseFormat::SnakeCase
-    } else if from_screaming_snake {
-        CaseFormat::ScreamingSnakeCase
-    } else if from_kebab {
-        CaseFormat::KebabCase
+/// Picks the single selected case format from a group of mutually exclusive
+/// clap flags. The group is `required`, so exactly one is set.
+fn selected_format(
+    camel: bool,
+    pascal: bool,
+    snake: bool,
+    screaming_snake: bool,
+    kebab: bool,
+) -> &'static str {
+    if camel {
+        "camel"
+    } else if pascal {
+        "pascal"
+    } else if snake {
+        "snake"
+    } else if screaming_snake {
+        "screaming_snake"
+    } else if kebab {
+        "kebab"
     } else {
-        CaseFormat::ScreamingKebabCase
+        "screaming_kebab"
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-#[time("info")]
+#[time("debug")]
 fn run_convert(
     from_camel: bool,
     from_pascal: bool,
     from_snake: bool,
     from_screaming_snake: bool,
     from_kebab: bool,
-    from_screaming_kebab: bool,
+    _from_screaming_kebab: bool,
     to_camel: bool,
     to_pascal: bool,
     to_snake: bool,
     to_screaming_snake: bool,
     to_kebab: bool,
-    to_screaming_kebab: bool,
+    _to_screaming_kebab: bool,
     path: PathBuf,
     recursive: bool,
     dry_run: bool,
@@ -563,123 +573,81 @@ fn run_convert(
     glob: Option<String>,
     word_filter: Option<String>,
 ) -> anyhow::Result<()> {
-    let from_format = determine_case_format(
-        from_camel,
-        from_pascal,
-        from_snake,
-        from_screaming_snake,
-        from_kebab,
-        from_screaming_kebab,
-    );
-
-    let to_format = determine_case_format(
-        to_camel,
-        to_pascal,
-        to_snake,
-        to_screaming_snake,
-        to_kebab,
-        to_screaming_kebab,
-    );
-
-    info!("Converting from {:?} to {:?}", from_format, to_format);
-    info!("Target path: {}", path.display());
-    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
-
-    if let Some(ref exts) = extensions {
-        debug!("File extensions: {:?}", exts);
-    }
-    if !prefix.is_empty() {
-        debug!("Prefix: '{}'", prefix);
-    }
-    if !suffix.is_empty() {
-        debug!("Suffix: '{}'", suffix);
-    }
-    if let Some(ref pattern) = glob {
-        debug!("Glob pattern: '{}'", pattern);
-    }
-    if let Some(ref filter) = word_filter {
-        debug!("Word filter: '{}'", filter);
-    }
-
-    let spinner = create_spinner("Processing files...");
-
-    let converter = CaseConverter::new(
-        from_format,
-        to_format,
-        extensions,
-        recursive,
-        dry_run,
-        prefix,
-        suffix,
+    let cfg = ConvertConfig {
+        from_format: Some(
+            selected_format(
+                from_camel,
+                from_pascal,
+                from_snake,
+                from_screaming_snake,
+                from_kebab,
+            )
+            .to_string(),
+        ),
+        to_format: Some(
+            selected_format(to_camel, to_pascal, to_snake, to_screaming_snake, to_kebab)
+                .to_string(),
+        ),
+        file_extensions: extensions,
+        recursive: Some(recursive),
+        prefix: Some(prefix),
+        suffix: Some(suffix),
+        glob,
+        word_filter,
         strip_prefix,
         strip_suffix,
         replace_prefix_from,
         replace_prefix_to,
         replace_suffix_from,
         replace_suffix_to,
-        glob,
-        word_filter,
-    )?;
+    };
 
-    let result = converter.process_directory(&path);
-
-    spinner.finish_and_clear();
-
-    match result {
-        Ok(_) => {
-            info!("Conversion completed successfully");
-            Ok(())
-        }
-        Err(e) => {
-            error!("Conversion failed: {}", e);
-            Err(e)
-        }
-    }
+    run_single_step(
+        "convert",
+        reformat_core::Preset {
+            steps: vec!["convert".to_string()],
+            convert: Some(cfg),
+            ..Default::default()
+        },
+        &path,
+        dry_run,
+        |_| "Conversion complete".to_string(),
+        "No changes needed",
+    )
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_clean(
     path: PathBuf,
     recursive: bool,
     dry_run: bool,
     extensions: Option<Vec<String>>,
 ) -> anyhow::Result<()> {
-    info!("Cleaning whitespace from: {}", path.display());
-    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
-
-    if let Some(ref exts) = extensions {
-        debug!("File extensions: {:?}", exts);
-    }
-
-    let mut options = WhitespaceOptions {
-        recursive,
-        dry_run,
-        ..Default::default()
+    let cfg = CleanConfig {
+        remove_trailing: Some(true),
+        file_extensions: extensions,
+        recursive: Some(recursive),
     };
-    if let Some(exts) = extensions {
-        options.file_extensions = exts;
-    }
-
-    let spinner = create_spinner("Cleaning files...");
-
-    let cleaner = WhitespaceCleaner::new(options);
-    let (files, lines) = cleaner.process(&path)?;
-
-    spinner.finish_and_clear();
-
-    if files > 0 {
-        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-        info!("{}Cleaned {} lines in {} file(s)", prefix, lines, files);
-        println!("{}Cleaned {} lines in {} file(s)", prefix, lines, files);
-    } else {
-        info!("No files needed cleaning");
-        println!("No files needed cleaning");
-    }
-
-    Ok(())
+    run_single_step(
+        "clean",
+        reformat_core::Preset {
+            steps: vec!["clean".to_string()],
+            clean: Some(cfg),
+            ..Default::default()
+        },
+        &path,
+        dry_run,
+        |o| match o {
+            StepOutcome::Counted { files, units } => {
+                format!("Cleaned {} lines in {} file(s)", units, files)
+            }
+            _ => unreachable!(),
+        },
+        "No files needed cleaning",
+    )
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_emojis(
     path: PathBuf,
     recursive: bool,
@@ -688,55 +656,34 @@ fn run_emojis(
     replace_task: bool,
     remove_other: bool,
 ) -> anyhow::Result<()> {
-    info!("Processing emojis from: {}", path.display());
-    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
-    info!(
-        "Replace task emojis: {}, Remove other emojis: {}",
-        replace_task, remove_other
-    );
-
-    if let Some(ref exts) = extensions {
-        debug!("File extensions: {:?}", exts);
-    }
-
-    let mut options = EmojiOptions {
-        recursive,
-        dry_run,
-        replace_task_emojis: replace_task,
-        remove_other_emojis: remove_other,
-        ..Default::default()
+    let cfg = EmojiConfig {
+        replace_task_emojis: Some(replace_task),
+        remove_other_emojis: Some(remove_other),
+        file_extensions: extensions,
+        recursive: Some(recursive),
     };
-    if let Some(exts) = extensions {
-        options.file_extensions = exts;
-    }
-
-    let spinner = create_spinner("Transforming emojis...");
-
-    let transformer = EmojiTransformer::new(options);
-    let (files, changes) = transformer.process(&path)?;
-
-    spinner.finish_and_clear();
-
-    if files > 0 {
-        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-        info!(
-            "{}Transformed emojis in {} file(s) ({} changes)",
-            prefix, files, changes
-        );
-        println!(
-            "{}Transformed emojis in {} file(s) ({} changes)",
-            prefix, files, changes
-        );
-    } else {
-        info!("No files contained emojis to transform");
-        println!("No files contained emojis to transform");
-    }
-
-    Ok(())
+    run_single_step(
+        "emojis",
+        reformat_core::Preset {
+            steps: vec!["emojis".to_string()],
+            emojis: Some(cfg),
+            ..Default::default()
+        },
+        &path,
+        dry_run,
+        |o| match o {
+            StepOutcome::Counted { files, units } => format!(
+                "Transformed emojis in {} file(s) ({} changes)",
+                files, units
+            ),
+            _ => unreachable!(),
+        },
+        "No files contained emojis to transform",
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
-#[time("info")]
+#[time("debug")]
 fn run_rename(
     path: PathBuf,
     recursive: bool,
@@ -756,103 +703,71 @@ fn run_rename(
     timestamp_long: bool,
     timestamp_short: bool,
 ) -> anyhow::Result<()> {
-    info!("Renaming files in: {}", path.display());
-    info!(
-        "Recursive: {}, Dry run: {}, Include symlinks: {}",
-        recursive, dry_run, include_symlinks
-    );
-
-    let mut options = RenameOptions {
-        recursive,
-        dry_run,
-        include_symlinks,
-        ..Default::default()
+    let case_transform = if to_lowercase {
+        Some("lowercase")
+    } else if to_uppercase {
+        Some("uppercase")
+    } else if to_capitalize {
+        Some("capitalize")
+    } else {
+        None
+    };
+    let space_replace = if underscored {
+        Some("underscore")
+    } else if hyphenated {
+        Some("hyphen")
+    } else {
+        None
+    };
+    let timestamp = if timestamp_long {
+        Some("long")
+    } else if timestamp_short {
+        Some("short")
+    } else {
+        None
     };
 
-    // Set case transform (only one should be selected)
-    if to_lowercase {
-        options.case_transform = CaseTransform::Lowercase;
-        debug!("Case transform: Lowercase");
-    } else if to_uppercase {
-        options.case_transform = CaseTransform::Uppercase;
-        debug!("Case transform: Uppercase");
-    } else if to_capitalize {
-        options.case_transform = CaseTransform::Capitalize;
-        debug!("Case transform: Capitalize");
-    }
+    let cfg = RenameConfig {
+        case_transform: case_transform.map(String::from),
+        space_replace: space_replace.map(String::from),
+        recursive: Some(recursive),
+        include_symlinks: Some(include_symlinks),
+        add_prefix,
+        remove_prefix: rm_prefix,
+        add_suffix,
+        remove_suffix: rm_suffix,
+        replace_prefix,
+        replace_suffix,
+        timestamp: timestamp.map(String::from),
+    };
+    run_single_step(
+        "rename",
+        reformat_core::Preset {
+            steps: vec!["rename".to_string()],
+            rename: Some(cfg),
+            ..Default::default()
+        },
+        &path,
+        dry_run,
+        |o| match o {
+            StepOutcome::Renamed(s) => format!("Renamed {} file(s)", s.renamed),
+            _ => unreachable!(),
+        },
+        "No files needed renaming",
+    )
+}
 
-    // Set separator replacement (only one should be selected)
-    if underscored {
-        options.space_replace = SpaceReplace::Underscore;
-        debug!("Separator replacement: Underscore");
-    } else if hyphenated {
-        options.space_replace = SpaceReplace::Hyphen;
-        debug!("Separator replacement: Hyphen");
+/// Resolves where a JSON record should be written, warning before replacing
+/// an existing file rather than silently clobbering it.
+fn resolve_record_path(explicit: Option<PathBuf>, default_name: &str) -> anyhow::Result<PathBuf> {
+    let path = match explicit {
+        Some(p) => p,
+        None => std::env::current_dir()?.join(default_name),
+    };
+    if path.exists() {
+        warn!("Overwriting existing file: {}", path.display());
     }
-
-    // Set prefix/suffix options
-    options.add_prefix = add_prefix.clone();
-    options.remove_prefix = rm_prefix.clone();
-    options.add_suffix = add_suffix.clone();
-    options.remove_suffix = rm_suffix.clone();
-
-    // Set replace prefix/suffix options
-    if let Some(ref args) = replace_prefix {
-        if args.len() == 2 {
-            options.replace_prefix = Some((args[0].clone(), args[1].clone()));
-        }
-    }
-    if let Some(ref args) = replace_suffix {
-        if args.len() == 2 {
-            options.replace_suffix = Some((args[0].clone(), args[1].clone()));
-        }
-    }
-
-    // Set timestamp format (only one should be selected)
-    if timestamp_long {
-        options.timestamp_format = TimestampFormat::Long;
-        debug!("Timestamp format: Long (YYYYMMDD)");
-    } else if timestamp_short {
-        options.timestamp_format = TimestampFormat::Short;
-        debug!("Timestamp format: Short (YYMMDD)");
-    }
-
-    if let Some(ref prefix) = add_prefix {
-        debug!("Add prefix: '{}'", prefix);
-    }
-    if let Some(ref prefix) = rm_prefix {
-        debug!("Remove prefix: '{}'", prefix);
-    }
-    if let Some(ref suffix) = add_suffix {
-        debug!("Add suffix: '{}'", suffix);
-    }
-    if let Some(ref suffix) = rm_suffix {
-        debug!("Remove suffix: '{}'", suffix);
-    }
-    if let Some(ref args) = replace_prefix {
-        debug!("Replace prefix: '{}' -> '{}'", args[0], args[1]);
-    }
-    if let Some(ref args) = replace_suffix {
-        debug!("Replace suffix: '{}' -> '{}'", args[0], args[1]);
-    }
-
-    let spinner = create_spinner("Renaming files...");
-
-    let renamer = FileRenamer::new(options);
-    let count = renamer.process(&path)?;
-
-    spinner.finish_and_clear();
-
-    if count > 0 {
-        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-        info!("{}Renamed {} file(s)", prefix, count);
-        println!("{}Renamed {} file(s)", prefix, count);
-    } else {
-        info!("No files needed renaming");
-        println!("No files needed renaming");
-    }
-
-    Ok(())
+    Ok(path)
 }
 
 /// Prompts the user for a yes/no answer
@@ -926,7 +841,7 @@ fn prompt_scan_dirs(default_dir: &Path) -> Vec<PathBuf> {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[time("info")]
+#[time("debug")]
 fn run_group(
     path: PathBuf,
     recursive: bool,
@@ -939,86 +854,86 @@ fn run_group(
     no_interactive: bool,
     scope: Option<PathBuf>,
     verbose_scan: bool,
+    changes_file: Option<PathBuf>,
+    fixes_file: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    info!("Grouping files by prefix in: {}", path.display());
-    info!(
+    debug!("Grouping files by prefix in: {}", path.display());
+    debug!(
         "Recursive: {}, Dry run: {}, Separator: '{}', Min count: {}",
         recursive, dry_run, separator, min_count
     );
     if from_suffix {
-        info!("From suffix: enabled (splitting at last separator)");
+        debug!("From suffix: enabled (splitting at last separator)");
     }
     if strip_prefix || from_suffix {
-        info!("Strip prefix: enabled");
+        debug!("Strip prefix: enabled");
     }
 
-    let options = GroupOptions {
-        recursive,
-        dry_run,
-        separator,
-        min_count,
-        // from_suffix implies strip_prefix
-        strip_prefix: strip_prefix || from_suffix,
-        from_suffix,
+    let cfg = GroupConfig {
+        separator: Some(separator.to_string()),
+        min_count: Some(min_count),
+        strip_prefix: Some(strip_prefix),
+        from_suffix: Some(from_suffix),
+        recursive: Some(recursive),
     };
 
-    let grouper = FileGrouper::new(options);
+    let grouper = FileGrouper::new(cfg.to_options(dry_run)?);
 
     if preview {
-        let spinner = create_spinner("Analyzing files...");
         let groups = grouper.preview(&path)?;
-        spinner.finish_and_clear();
 
         if groups.is_empty() {
-            println!(
+            info!(
                 "No file groups found matching criteria (min_count: {})",
                 min_count
             );
         } else {
-            println!("Found {} potential group(s):", groups.len());
+            info!("Found {} potential group(s):", groups.len());
             for (prefix, files) in &groups {
-                println!("\n  {} ({} files):", prefix, files.len());
+                info!("\n  {} ({} files):", prefix, files.len());
                 for file in files {
-                    println!("    - {}", file);
+                    info!("    - {}", file);
                 }
             }
         }
         return Ok(());
     }
-
-    let spinner = create_spinner("Grouping files...");
     let result = grouper.process_with_changes(&path)?;
-    spinner.finish_and_clear();
 
     let stats = &result.stats;
 
     if stats.files_moved > 0 {
         let prefix_str = if dry_run { "[DRY-RUN] " } else { "" };
-        info!(
+        debug!(
             "{}Grouping complete: {} directories created, {} files moved",
             prefix_str, stats.dirs_created, stats.files_moved
         );
-        println!("{}Grouping complete:", prefix_str);
+        info!("{}Grouping complete:", prefix_str);
         if stats.dirs_created > 0 {
-            println!("  - Directories created: {}", stats.dirs_created);
+            info!("  - Directories created: {}", stats.dirs_created);
         }
-        println!("  - Files moved: {}", stats.files_moved);
+        info!("  - Files moved: {}", stats.files_moved);
         if stats.files_renamed > 0 {
-            println!(
+            info!(
                 "  - Files renamed (prefix stripped): {}",
                 stats.files_renamed
             );
         }
 
-        // Write changes.json (even in dry-run mode, for reference)
-        if !result.changes.is_empty() {
-            let changes_path = std::env::current_dir()?.join("changes.json");
+        // A dry run must not leave anything behind. Writing the record
+        // anyway was worse than untidy: it described moves that had not
+        // happened, and feeding it to the reference fixer would rewrite
+        // references to files still sitting where they were.
+        if dry_run {
+            info!("[DRY-RUN] No changes file written.");
+        } else if !result.changes.is_empty() {
+            let changes_path = resolve_record_path(changes_file, "changes.json")?;
             result.changes.write_to_file(&changes_path)?;
-            println!("\nChanges recorded to: {}", changes_path.display());
+            info!("\nChanges recorded to: {}", changes_path.display());
 
             // Interactive workflow for reference scanning
             if !dry_run && !no_interactive {
-                println!();
+                info!("");
                 if prompt_yes_no("Would you like to scan for broken references?") {
                     let dirs_to_scan = if let Some(dir) = scope {
                         vec![dir]
@@ -1029,7 +944,7 @@ fn run_group(
                     // Check for scope/target overlap and warn
                     for scan_dir in &dirs_to_scan {
                         if let Some(warning) = check_scope_overlap(scan_dir, &path) {
-                            eprintln!("\n{}\n", warning);
+                            warn!("\n{}\n", warning);
                         }
                     }
 
@@ -1039,59 +954,58 @@ fn run_group(
                         ..Default::default()
                     };
 
-                    let spinner = if verbose_scan {
-                        eprintln!("Scanning for broken references...");
-                        None
-                    } else {
-                        Some(create_spinner("Scanning for broken references..."))
-                    };
+                    debug!("Scanning for broken references...");
                     let scanner =
-                        ReferenceScanner::from_change_record(&result.changes, scan_options);
+                        ReferenceScanner::from_change_record(&result.changes, scan_options)?;
                     let fix_record = scanner.scan(&dirs_to_scan)?;
-                    if let Some(s) = spinner {
-                        s.finish_and_clear();
-                    }
 
                     if fix_record.is_empty() {
-                        println!("No broken references found.");
+                        info!("No broken references found.");
                     } else {
                         // Write fixes.json
-                        let fixes_path = std::env::current_dir()?.join("fixes.json");
+                        let fixes_path = resolve_record_path(fixes_file.clone(), "fixes.json")?;
                         fix_record.write_to_file(&fixes_path)?;
-                        println!("\nFound {} broken reference(s).", fix_record.len());
-                        println!("Proposed fixes written to: {}", fixes_path.display());
+                        info!("\nFound {} broken reference(s).", fix_record.len());
+                        info!("Proposed fixes written to: {}", fixes_path.display());
 
                         // Show summary of fixes
-                        println!("\nProposed fixes:");
+                        info!("\nProposed fixes:");
                         for fix in fix_record.fixes.iter().take(10) {
-                            println!(
+                            info!(
                                 "  {}:{}: '{}' -> '{}'",
                                 fix.file, fix.line, fix.old_reference, fix.new_reference
                             );
                         }
                         if fix_record.len() > 10 {
-                            println!("  ... and {} more (see fixes.json)", fix_record.len() - 10);
+                            info!("  ... and {} more (see fixes.json)", fix_record.len() - 10);
                         }
 
-                        println!();
+                        info!("");
                         if prompt_yes_no("Review fixes.json and apply changes?") {
-                            let spinner = create_spinner("Applying fixes...");
                             let apply_result = ReferenceFixer::apply_fixes(&fix_record)?;
-                            spinner.finish_and_clear();
 
-                            println!(
+                            info!(
                                 "\nFixed {} reference(s) in {} file(s).",
                                 apply_result.references_fixed, apply_result.files_modified
                             );
 
+                            if apply_result.references_skipped > 0 {
+                                info!(
+                                    "Skipped {} reference(s): the recorded text no longer \
+                                     matches the file. The fixes may already have been \
+                                     applied, or the file changed since the scan.",
+                                    apply_result.references_skipped
+                                );
+                            }
+
                             if !apply_result.errors.is_empty() {
-                                println!("\nErrors encountered:");
+                                info!("\nErrors encountered:");
                                 for err in &apply_result.errors {
-                                    println!("  - {}", err);
+                                    info!("  - {}", err);
                                 }
                             }
                         } else {
-                            println!("Fixes not applied. You can review fixes.json and apply them later.");
+                            info!("Fixes not applied. You can review fixes.json and apply them later.");
                         }
                     }
                 }
@@ -1102,7 +1016,7 @@ fn run_group(
                 // Check for scope/target overlap and warn
                 for scan_dir in &dirs_to_scan {
                     if let Some(warning) = check_scope_overlap(scan_dir, &path) {
-                        eprintln!("\n{}\n", warning);
+                        warn!("\n{}\n", warning);
                     }
                 }
 
@@ -1111,37 +1025,28 @@ fn run_group(
                     ..Default::default()
                 };
 
-                let spinner = if verbose_scan {
-                    eprintln!("Scanning for broken references...");
-                    None
-                } else {
-                    Some(create_spinner("Scanning for broken references..."))
-                };
-                let scanner = ReferenceScanner::from_change_record(&result.changes, scan_options);
+                debug!("Scanning for broken references...");
+                let scanner = ReferenceScanner::from_change_record(&result.changes, scan_options)?;
                 let fix_record = scanner.scan(&dirs_to_scan)?;
-                if let Some(s) = spinner {
-                    s.finish_and_clear();
-                }
 
                 if fix_record.is_empty() {
-                    println!("\nNo broken references found.");
+                    info!("\nNo broken references found.");
                 } else {
-                    let fixes_path = std::env::current_dir()?.join("fixes.json");
+                    let fixes_path = resolve_record_path(fixes_file, "fixes.json")?;
                     fix_record.write_to_file(&fixes_path)?;
-                    println!("\nFound {} broken reference(s).", fix_record.len());
-                    println!("Proposed fixes written to: {}", fixes_path.display());
+                    info!("\nFound {} broken reference(s).", fix_record.len());
+                    info!("Proposed fixes written to: {}", fixes_path.display());
                 }
             }
         }
     } else {
         info!("No files needed grouping");
-        println!("No files needed grouping");
     }
 
     Ok(())
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_endings(
     path: PathBuf,
     style: &str,
@@ -1149,48 +1054,31 @@ fn run_endings(
     dry_run: bool,
     extensions: Option<Vec<String>>,
 ) -> anyhow::Result<()> {
-    let line_ending = LineEnding::parse(style).ok_or_else(|| {
-        anyhow::anyhow!(
-            "invalid line ending style '{}'. Valid values: lf, crlf, cr",
-            style
-        )
-    })?;
-
-    info!(
-        "Normalizing line endings to {:?} in: {}",
-        line_ending,
-        path.display()
-    );
-
-    let mut options = EndingsOptions {
-        style: line_ending,
-        recursive,
-        dry_run,
-        ..Default::default()
+    let cfg = EndingsConfig {
+        style: Some(style.to_string()),
+        file_extensions: extensions,
+        recursive: Some(recursive),
     };
-    if let Some(exts) = extensions {
-        options.file_extensions = exts;
-    }
-
-    let spinner = create_spinner("Normalizing line endings...");
-    let normalizer = EndingsNormalizer::new(options);
-    let (files, endings) = normalizer.process(&path)?;
-    spinner.finish_and_clear();
-
-    if files > 0 {
-        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-        println!(
-            "{}Normalized {} ending(s) in {} file(s)",
-            prefix, endings, files
-        );
-    } else {
-        println!("No files needed line ending normalization");
-    }
-
-    Ok(())
+    run_single_step(
+        "endings",
+        reformat_core::Preset {
+            steps: vec!["endings".to_string()],
+            endings: Some(cfg),
+            ..Default::default()
+        },
+        &path,
+        dry_run,
+        |o| match o {
+            StepOutcome::Counted { files, units } => {
+                format!("Normalized {} ending(s) in {} file(s)", units, files)
+            }
+            _ => unreachable!(),
+        },
+        "No files needed line ending normalization",
+    )
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_indent(
     path: PathBuf,
     style: &str,
@@ -1199,50 +1087,32 @@ fn run_indent(
     dry_run: bool,
     extensions: Option<Vec<String>>,
 ) -> anyhow::Result<()> {
-    let indent_style = IndentStyle::parse(style).ok_or_else(|| {
-        anyhow::anyhow!(
-            "invalid indent style '{}'. Valid values: spaces, tabs",
-            style
-        )
-    })?;
-
-    info!(
-        "Normalizing indentation to {:?} (width {}) in: {}",
-        indent_style,
-        width,
-        path.display()
-    );
-
-    let mut options = IndentOptions {
-        style: indent_style,
-        width,
-        recursive,
-        dry_run,
-        ..Default::default()
+    let cfg = IndentConfig {
+        style: Some(style.to_string()),
+        width: Some(width),
+        file_extensions: extensions,
+        recursive: Some(recursive),
     };
-    if let Some(exts) = extensions {
-        options.file_extensions = exts;
-    }
-
-    let spinner = create_spinner("Normalizing indentation...");
-    let normalizer = IndentNormalizer::new(options);
-    let (files, lines) = normalizer.process(&path)?;
-    spinner.finish_and_clear();
-
-    if files > 0 {
-        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-        println!(
-            "{}Normalized {} line(s) in {} file(s)",
-            prefix, lines, files
-        );
-    } else {
-        println!("No files needed indentation normalization");
-    }
-
-    Ok(())
+    run_single_step(
+        "indent",
+        reformat_core::Preset {
+            steps: vec!["indent".to_string()],
+            indent: Some(cfg),
+            ..Default::default()
+        },
+        &path,
+        dry_run,
+        |o| match o {
+            StepOutcome::Counted { files, units } => {
+                format!("Normalized {} line(s) in {} file(s)", units, files)
+            }
+            _ => unreachable!(),
+        },
+        "No files needed indentation normalization",
+    )
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_replace(
     path: PathBuf,
     find: &str,
@@ -1251,45 +1121,34 @@ fn run_replace(
     dry_run: bool,
     extensions: Option<Vec<String>>,
 ) -> anyhow::Result<()> {
-    info!(
-        "Replacing '{}' with '{}' in: {}",
-        find,
-        replace_with,
-        path.display()
-    );
-
-    let mut options = ReplaceOptions {
-        patterns: vec![ReplacePattern {
+    let cfg = ReplaceConfig {
+        patterns: Some(vec![ReplacePatternEntry {
             find: find.to_string(),
             replace: replace_with.to_string(),
-        }],
-        recursive,
-        dry_run,
-        ..Default::default()
+        }]),
+        file_extensions: extensions,
+        recursive: Some(recursive),
     };
-    if let Some(exts) = extensions {
-        options.file_extensions = exts;
-    }
-
-    let spinner = create_spinner("Replacing content...");
-    let replacer = ContentReplacer::new(options)?;
-    let (files, replacements) = replacer.process(&path)?;
-    spinner.finish_and_clear();
-
-    if files > 0 {
-        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-        println!(
-            "{}Made {} replacement(s) in {} file(s)",
-            prefix, replacements, files
-        );
-    } else {
-        println!("No files matched the pattern");
-    }
-
-    Ok(())
+    run_single_step(
+        "replace",
+        reformat_core::Preset {
+            steps: vec!["replace".to_string()],
+            replace: Some(cfg),
+            ..Default::default()
+        },
+        &path,
+        dry_run,
+        |o| match o {
+            StepOutcome::Counted { files, units } => {
+                format!("Made {} replacement(s) in {} file(s)", units, files)
+            }
+            _ => unreachable!(),
+        },
+        "No files matched the pattern",
+    )
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_header(
     path: PathBuf,
     text: &str,
@@ -1298,34 +1157,183 @@ fn run_header(
     dry_run: bool,
     extensions: Option<Vec<String>>,
 ) -> anyhow::Result<()> {
-    info!("Managing headers in: {}", path.display());
-
-    // Allow \n in the text argument to represent actual newlines
-    let resolved_text = text.replace("\\n", "\n");
-
-    let mut options = HeaderOptions {
-        text: resolved_text,
-        update_year,
-        recursive,
-        dry_run,
-        ..Default::default()
+    let cfg = HeaderConfig {
+        // Allow \n in the argument to stand for a real newline.
+        text: Some(text.replace("\\n", "\n")),
+        update_year: Some(update_year),
+        file_extensions: extensions,
+        recursive: Some(recursive),
     };
-    if let Some(exts) = extensions {
-        options.file_extensions = exts;
+    run_single_step(
+        "header",
+        reformat_core::Preset {
+            steps: vec!["header".to_string()],
+            header: Some(cfg),
+            ..Default::default()
+        },
+        &path,
+        dry_run,
+        |o| match o {
+            StepOutcome::Counted { files, .. } => {
+                format!("Updated headers in {} file(s)", files)
+            }
+            _ => unreachable!(),
+        },
+        "All files already have correct headers",
+    )
+}
+
+/// What a step did. Steps compute; callers present.
+///
+/// Option assembly is shared -- that was the real duplication -- but a
+/// standalone subcommand and a pipeline step word their summaries
+/// differently, so formatting stays with the caller.
+enum StepOutcome {
+    /// Files touched, plus a step-specific unit count (lines, changes,
+    /// replacements, endings).
+    Counted {
+        files: usize,
+        units: usize,
+    },
+    Renamed(reformat_core::RenameStats),
+    Grouped(reformat_core::GroupStats),
+    Converted,
+}
+
+impl StepOutcome {
+    fn files(&self) -> usize {
+        match self {
+            StepOutcome::Counted { files, .. } => *files,
+            StepOutcome::Renamed(s) => s.renamed,
+            StepOutcome::Grouped(s) => s.files_moved,
+            StepOutcome::Converted => 0,
+        }
+    }
+}
+
+/// Runs one pipeline step and reports what it did.
+///
+/// Both the subcommands and the preset/job runner funnel through here: each
+/// builds the step's `*Config` and calls this. Previously the two paths
+/// assembled options separately and had drifted -- the preset `convert` step
+/// hardcoded `None` for the strip/replace affix settings, so half of
+/// `ConvertConfig` was unreachable from a preset.
+fn run_step(
+    step: &str,
+    preset: &reformat_core::Preset,
+    path: &Path,
+    dry_run: bool,
+    label: &str,
+) -> anyhow::Result<StepOutcome> {
+    if !path.exists() {
+        anyhow::bail!("path '{}' does not exist", path.display());
     }
 
-    let spinner = create_spinner("Managing file headers...");
-    let manager = HeaderManager::new(options)?;
-    let (files, _) = manager.process(&path)?;
-    spinner.finish_and_clear();
+    let missing = |what: &str| {
+        anyhow::anyhow!(
+            "{}: '{}' step requires a [{}] config with {}",
+            label,
+            step,
+            step,
+            what
+        )
+    };
 
-    if files > 0 {
-        let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-        println!("{}Updated headers in {} file(s)", prefix, files);
+    let outcome = match step {
+        "rename" => {
+            let cfg = preset.rename.clone().unwrap_or_default();
+            StepOutcome::Renamed(
+                FileRenamer::new(cfg.to_options(dry_run)?).process_with_stats(path)?,
+            )
+        }
+
+        "emojis" => {
+            let cfg = preset.emojis.clone().unwrap_or_default();
+            let (files, units) = EmojiTransformer::new(cfg.to_options(dry_run)).process(path)?;
+            StepOutcome::Counted { files, units }
+        }
+
+        "clean" => {
+            let cfg = preset.clean.clone().unwrap_or_default();
+            let (files, units) = WhitespaceCleaner::new(cfg.to_options(dry_run)).process(path)?;
+            StepOutcome::Counted { files, units }
+        }
+
+        "convert" => {
+            let cfg = preset
+                .convert
+                .clone()
+                .ok_or_else(|| missing("from_format and to_format"))?;
+            cfg.to_converter(dry_run)?.process_directory(path)?;
+            StepOutcome::Converted
+        }
+
+        "group" => {
+            let cfg = preset.group.clone().unwrap_or_default();
+            StepOutcome::Grouped(
+                FileGrouper::new(cfg.to_options(dry_run)?)
+                    .process_with_changes(path)?
+                    .stats,
+            )
+        }
+
+        "endings" => {
+            let cfg = preset.endings.clone().unwrap_or_default();
+            let (files, units) = EndingsNormalizer::new(cfg.to_options(dry_run)?).process(path)?;
+            StepOutcome::Counted { files, units }
+        }
+
+        "indent" => {
+            let cfg = preset.indent.clone().unwrap_or_default();
+            let (files, units) = IndentNormalizer::new(cfg.to_options(dry_run)?).process(path)?;
+            StepOutcome::Counted { files, units }
+        }
+
+        "replace" => {
+            let cfg = preset.replace.clone().ok_or_else(|| missing("patterns"))?;
+            let (files, units) = ContentReplacer::new(cfg.to_options(dry_run)?)?.process(path)?;
+            StepOutcome::Counted { files, units }
+        }
+
+        "header" => {
+            let cfg = preset.header.clone().ok_or_else(|| missing("text"))?;
+            let (files, units) = HeaderManager::new(cfg.to_options(dry_run)?)?.process(path)?;
+            StepOutcome::Counted { files, units }
+        }
+
+        _ => unreachable!("step validation should have caught this"),
+    };
+
+    Ok(outcome)
+}
+
+/// Wraps a single step as a standalone subcommand, presenting the result the
+/// way that command always has.
+fn run_single_step(
+    step: &str,
+    preset: reformat_core::Preset,
+    path: &Path,
+    dry_run: bool,
+    summary: impl Fn(&StepOutcome) -> String,
+    empty: &str,
+) -> anyhow::Result<()> {
+    let outcome = run_step(step, &preset, path, dry_run, step)?;
+    let prefix = if dry_run { "[DRY-RUN] " } else { "" };
+
+    if let StepOutcome::Renamed(ref stats) = outcome {
+        if stats.skipped > 0 {
+            warn!("Skipped {} file(s):", stats.skipped);
+            for message in &stats.errors {
+                warn!("  {}", message);
+            }
+        }
+    }
+
+    if outcome.files() > 0 || matches!(outcome, StepOutcome::Converted) {
+        info!("{}{}", prefix, summary(&outcome));
     } else {
-        println!("All files already have correct headers");
+        info!("{}", empty);
     }
-
     Ok(())
 }
 
@@ -1338,382 +1346,67 @@ fn run_pipeline(
 ) -> anyhow::Result<()> {
     reformat_core::config::validate_steps(name, &preset.steps)?;
 
-    info!(
+    debug!(
         "Running '{}' with {} step(s) on: {}",
         name,
         preset.steps.len(),
         path.display()
     );
 
+    let prefix = if dry_run { "[DRY-RUN] " } else { "" };
+
     for (i, step) in preset.steps.iter().enumerate() {
-        let step_label = format!("[{}/{}] {}", i + 1, preset.steps.len(), step);
-        info!("Executing step: {}", step_label);
+        debug!(
+            "Executing step [{}/{}]: {}",
+            i + 1,
+            preset.steps.len(),
+            step
+        );
+        let outcome = run_step(step, preset, path, dry_run, name)?;
 
-        match step.as_str() {
-            "rename" => {
-                let cfg = preset.rename.as_ref();
-                let mut options = RenameOptions {
-                    dry_run,
-                    ..Default::default()
-                };
-                if let Some(c) = cfg {
-                    if let Some(ct) = c.parse_case_transform() {
-                        options.case_transform = ct;
-                    }
-                    if let Some(sr) = c.parse_space_replace() {
-                        options.space_replace = sr;
-                    }
-                    if let Some(r) = c.recursive {
-                        options.recursive = r;
-                    }
-                    if let Some(s) = c.include_symlinks {
-                        options.include_symlinks = s;
-                    }
-                }
-
-                let spinner = create_spinner(&format!("{}: renaming files...", step_label));
-                let renamer = FileRenamer::new(options);
-                let count = renamer.process(path)?;
-                spinner.finish_and_clear();
-
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                if count > 0 {
-                    println!("{}  rename: {} file(s) renamed", prefix, count);
+        match &outcome {
+            StepOutcome::Converted => info!("{}  {}: complete", prefix, step),
+            StepOutcome::Renamed(stats) => {
+                if stats.renamed > 0 {
+                    info!("{}  rename: {} file(s) renamed", prefix, stats.renamed);
                 } else {
-                    println!("  rename: no files needed renaming");
+                    info!("  rename: no files needed renaming");
+                }
+                if stats.skipped > 0 {
+                    warn!("  rename: skipped {} file(s)", stats.skipped);
+                    for message in &stats.errors {
+                        warn!("    {}", message);
+                    }
                 }
             }
-
-            "emojis" => {
-                let cfg = preset.emojis.as_ref();
-                let mut options = EmojiOptions {
-                    dry_run,
-                    ..Default::default()
-                };
-                if let Some(c) = cfg {
-                    if let Some(v) = c.replace_task_emojis {
-                        options.replace_task_emojis = v;
-                    }
-                    if let Some(v) = c.remove_other_emojis {
-                        options.remove_other_emojis = v;
-                    }
-                    if let Some(ref exts) = c.file_extensions {
-                        options.file_extensions = exts.clone();
-                    }
-                    if let Some(r) = c.recursive {
-                        options.recursive = r;
-                    }
-                }
-
-                let spinner = create_spinner(&format!("{}: transforming emojis...", step_label));
-                let transformer = EmojiTransformer::new(options);
-                let (files, changes) = transformer.process(path)?;
-                spinner.finish_and_clear();
-
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                if files > 0 {
-                    println!(
-                        "{}  emojis: {} file(s), {} change(s)",
-                        prefix, files, changes
-                    );
-                } else {
-                    println!("  emojis: no files contained emojis");
-                }
-            }
-
-            "clean" => {
-                let cfg = preset.clean.as_ref();
-                let mut options = WhitespaceOptions {
-                    dry_run,
-                    ..Default::default()
-                };
-                if let Some(c) = cfg {
-                    if let Some(v) = c.remove_trailing {
-                        options.remove_trailing = v;
-                    }
-                    if let Some(ref exts) = c.file_extensions {
-                        options.file_extensions = exts.clone();
-                    }
-                    if let Some(r) = c.recursive {
-                        options.recursive = r;
-                    }
-                }
-
-                let spinner = create_spinner(&format!("{}: cleaning whitespace...", step_label));
-                let cleaner = WhitespaceCleaner::new(options);
-                let (files, lines) = cleaner.process(path)?;
-                spinner.finish_and_clear();
-
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                if files > 0 {
-                    println!(
-                        "{}  clean: {} file(s), {} line(s) cleaned",
-                        prefix, files, lines
-                    );
-                } else {
-                    println!("  clean: no files needed cleaning");
-                }
-            }
-
-            "convert" => {
-                let cfg = preset.convert.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "preset '{}': 'convert' step requires a [convert] config with from_format and to_format",
-                        name
-                    )
-                })?;
-                let from = cfg.parse_from_format().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "preset '{}': convert.from_format is missing or invalid",
-                        name
-                    )
-                })?;
-                let to = cfg.parse_to_format().ok_or_else(|| {
-                    anyhow::anyhow!("preset '{}': convert.to_format is missing or invalid", name)
-                })?;
-
-                let converter = CaseConverter::new(
-                    from,
-                    to,
-                    cfg.file_extensions.clone(),
-                    cfg.recursive.unwrap_or(true),
-                    dry_run,
-                    cfg.prefix.clone().unwrap_or_default(),
-                    cfg.suffix.clone().unwrap_or_default(),
-                    None, // strip_prefix
-                    None, // strip_suffix
-                    None, // replace_prefix_from
-                    None, // replace_prefix_to
-                    None, // replace_suffix_from
-                    None, // replace_suffix_to
-                    cfg.glob.clone(),
-                    cfg.word_filter.clone(),
-                )?;
-
-                let spinner = create_spinner(&format!("{}: converting case...", step_label));
-                converter.process_directory(path)?;
-                spinner.finish_and_clear();
-
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                println!("{}  convert: {:?} -> {:?} complete", prefix, from, to);
-            }
-
-            "group" => {
-                let cfg = preset.group.as_ref();
-                let mut options = GroupOptions {
-                    dry_run,
-                    ..Default::default()
-                };
-                if let Some(c) = cfg {
-                    if let Some(ref s) = c.separator {
-                        if let Some(ch) = s.chars().next() {
-                            options.separator = ch;
-                        }
-                    }
-                    if let Some(v) = c.min_count {
-                        options.min_count = v;
-                    }
-                    if let Some(v) = c.strip_prefix {
-                        options.strip_prefix = v;
-                    }
-                    if let Some(v) = c.from_suffix {
-                        options.from_suffix = v;
-                        if v {
-                            options.strip_prefix = true;
-                        }
-                    }
-                    if let Some(r) = c.recursive {
-                        options.recursive = r;
-                    }
-                }
-
-                let spinner = create_spinner(&format!("{}: grouping files...", step_label));
-                let grouper = FileGrouper::new(options);
-                let result = grouper.process_with_changes(path)?;
-                spinner.finish_and_clear();
-
-                let stats = &result.stats;
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
+            StepOutcome::Grouped(stats) => {
                 if stats.files_moved > 0 {
-                    println!(
+                    info!(
                         "{}  group: {} dir(s) created, {} file(s) moved",
                         prefix, stats.dirs_created, stats.files_moved
                     );
                 } else {
-                    println!("  group: no files needed grouping");
+                    info!("  group: no files needed grouping");
                 }
             }
-
-            "endings" => {
-                let cfg = preset.endings.as_ref();
-                let mut options = EndingsOptions {
-                    dry_run,
-                    ..Default::default()
-                };
-                if let Some(c) = cfg {
-                    if let Some(ref s) = c.style {
-                        if let Some(le) = LineEnding::parse(s) {
-                            options.style = le;
-                        }
-                    }
-                    if let Some(ref exts) = c.file_extensions {
-                        options.file_extensions = exts.clone();
-                    }
-                    if let Some(r) = c.recursive {
-                        options.recursive = r;
-                    }
-                }
-
-                let spinner =
-                    create_spinner(&format!("{}: normalizing line endings...", step_label));
-                let normalizer = EndingsNormalizer::new(options);
-                let (files, endings) = normalizer.process(path)?;
-                spinner.finish_and_clear();
-
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                if files > 0 {
-                    println!(
-                        "{}  endings: {} file(s), {} ending(s) normalized",
-                        prefix, files, endings
+            StepOutcome::Counted { files, units } => {
+                if *files > 0 {
+                    info!(
+                        "{}  {}: {} file(s), {} change(s)",
+                        prefix, step, files, units
                     );
                 } else {
-                    println!("  endings: no files needed line ending normalization");
+                    info!("  {}: nothing to do", step);
                 }
             }
-
-            "indent" => {
-                let cfg = preset.indent.as_ref();
-                let mut options = IndentOptions {
-                    dry_run,
-                    ..Default::default()
-                };
-                if let Some(c) = cfg {
-                    if let Some(ref s) = c.style {
-                        if let Some(is) = IndentStyle::parse(s) {
-                            options.style = is;
-                        }
-                    }
-                    if let Some(w) = c.width {
-                        options.width = w;
-                    }
-                    if let Some(ref exts) = c.file_extensions {
-                        options.file_extensions = exts.clone();
-                    }
-                    if let Some(r) = c.recursive {
-                        options.recursive = r;
-                    }
-                }
-
-                let spinner =
-                    create_spinner(&format!("{}: normalizing indentation...", step_label));
-                let normalizer = IndentNormalizer::new(options);
-                let (files, lines) = normalizer.process(path)?;
-                spinner.finish_and_clear();
-
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                if files > 0 {
-                    println!(
-                        "{}  indent: {} file(s), {} line(s) normalized",
-                        prefix, files, lines
-                    );
-                } else {
-                    println!("  indent: no files needed indentation normalization");
-                }
-            }
-
-            "replace" => {
-                let cfg = preset.replace.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "preset '{}': 'replace' step requires a [replace] config with patterns",
-                        name
-                    )
-                })?;
-                let patterns = cfg
-                    .patterns
-                    .as_ref()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("preset '{}': replace.patterns is missing", name)
-                    })?
-                    .iter()
-                    .map(|p| ReplacePattern {
-                        find: p.find.clone(),
-                        replace: p.replace.clone(),
-                    })
-                    .collect();
-
-                let mut options = ReplaceOptions {
-                    patterns,
-                    dry_run,
-                    ..Default::default()
-                };
-                if let Some(ref exts) = cfg.file_extensions {
-                    options.file_extensions = exts.clone();
-                }
-                if let Some(r) = cfg.recursive {
-                    options.recursive = r;
-                }
-
-                let spinner = create_spinner(&format!("{}: replacing content...", step_label));
-                let replacer = ContentReplacer::new(options)?;
-                let (files, replacements) = replacer.process(path)?;
-                spinner.finish_and_clear();
-
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                if files > 0 {
-                    println!(
-                        "{}  replace: {} file(s), {} replacement(s)",
-                        prefix, files, replacements
-                    );
-                } else {
-                    println!("  replace: no files matched any patterns");
-                }
-            }
-
-            "header" => {
-                let cfg = preset.header.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "preset '{}': 'header' step requires a [header] config with text",
-                        name
-                    )
-                })?;
-                let text = cfg.text.clone().unwrap_or_default();
-                let mut options = HeaderOptions {
-                    text,
-                    dry_run,
-                    ..Default::default()
-                };
-                if let Some(v) = cfg.update_year {
-                    options.update_year = v;
-                }
-                if let Some(ref exts) = cfg.file_extensions {
-                    options.file_extensions = exts.clone();
-                }
-                if let Some(r) = cfg.recursive {
-                    options.recursive = r;
-                }
-
-                let spinner = create_spinner(&format!("{}: managing headers...", step_label));
-                let manager = HeaderManager::new(options)?;
-                let (files, _) = manager.process(path)?;
-                spinner.finish_and_clear();
-
-                let prefix = if dry_run { "[DRY-RUN] " } else { "" };
-                if files > 0 {
-                    println!("{}  header: {} file(s) updated", prefix, files);
-                } else {
-                    println!("  header: all files already have correct headers");
-                }
-            }
-
-            _ => unreachable!("step validation should have caught this"),
         }
     }
 
-    println!("Pipeline '{}' complete.", name);
+    info!("Pipeline '{}' complete.", name);
     Ok(())
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_preset(name: &str, path: PathBuf, dry_run: bool) -> anyhow::Result<()> {
     let config = config::load_config()?
         .ok_or_else(|| anyhow::anyhow!("reformat.json not found in current directory"))?;
@@ -1721,15 +1414,15 @@ fn run_preset(name: &str, path: PathBuf, dry_run: bool) -> anyhow::Result<()> {
     run_pipeline(name, preset, &path, dry_run)
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_job(job_source: &str, path: PathBuf, dry_run: bool) -> anyhow::Result<()> {
     let content = if job_source == "-" {
-        info!("Reading job from stdin");
+        debug!("Reading job from stdin");
         let mut buf = String::new();
         io::Read::read_to_string(&mut io::stdin(), &mut buf)?;
         buf
     } else {
-        info!("Reading job from file: {}", job_source);
+        debug!("Reading job from file: {}", job_source);
         std::fs::read_to_string(job_source)
             .map_err(|e| anyhow::anyhow!("failed to read job file '{}': {}", job_source, e))?
     };
@@ -1745,19 +1438,19 @@ fn run_job(job_source: &str, path: PathBuf, dry_run: bool) -> anyhow::Result<()>
     run_pipeline(label, &preset, &path, dry_run)
 }
 
-#[time("info")]
+#[time("debug")]
 fn run_combined(path: PathBuf, recursive: bool, dry_run: bool) -> anyhow::Result<()> {
-    info!("Running combined transformations on: {}", path.display());
-    info!("Recursive: {}, Dry run: {}", recursive, dry_run);
+    debug!("Running combined transformations on: {}", path.display());
+    debug!("Recursive: {}, Dry run: {}", recursive, dry_run);
+
+    if !path.exists() {
+        anyhow::bail!("path '{}' does not exist", path.display());
+    }
 
     let options = CombinedOptions { recursive, dry_run };
 
-    let spinner = create_spinner("Processing files (rename, emojis, clean)...");
-
     let processor = CombinedProcessor::new(options);
     let stats = processor.process(&path)?;
-
-    spinner.finish_and_clear();
 
     let prefix = if dry_run { "[DRY-RUN] " } else { "" };
 
@@ -1766,30 +1459,29 @@ fn run_combined(path: PathBuf, recursive: bool, dry_run: bool) -> anyhow::Result
         || stats.files_emoji_transformed > 0
         || stats.files_whitespace_cleaned > 0
     {
-        info!(
+        debug!(
             "{}Combined processing complete: {} renamed, {} emoji-transformed ({} changes), {} whitespace-cleaned ({} lines)",
             prefix, stats.files_renamed, stats.files_emoji_transformed, stats.emoji_changes,
             stats.files_whitespace_cleaned, stats.whitespace_lines_cleaned
         );
-        println!("{}Processed files:", prefix);
+        info!("{}Processed files:", prefix);
         if stats.files_renamed > 0 {
-            println!("  - Renamed: {} file(s)", stats.files_renamed);
+            info!("  - Renamed: {} file(s)", stats.files_renamed);
         }
         if stats.files_emoji_transformed > 0 {
-            println!(
+            info!(
                 "  - Emoji transformations: {} file(s) ({} changes)",
                 stats.files_emoji_transformed, stats.emoji_changes
             );
         }
         if stats.files_whitespace_cleaned > 0 {
-            println!(
+            info!(
                 "  - Whitespace cleaned: {} file(s) ({} lines)",
                 stats.files_whitespace_cleaned, stats.whitespace_lines_cleaned
             );
         }
     } else {
         info!("No files needed processing");
-        println!("No files needed processing");
     }
 
     Ok(())
@@ -1800,7 +1492,7 @@ fn main() -> anyhow::Result<()> {
 
     // Initialize logging
     if let Err(e) = init_logging(cli.verbose, cli.quiet, cli.log_file.clone()) {
-        eprintln!("Warning: Failed to initialize logging: {}", e);
+        warn!("Warning: Failed to initialize logging: {}", e);
     }
 
     debug!("CLI arguments parsed successfully");
@@ -1813,7 +1505,7 @@ fn main() -> anyhow::Result<()> {
                     debug!("Running preset '{}'", preset_name);
                     run_preset(&preset_name, path, cli.dry_run)
                 } else {
-                    error!("No path specified. Usage: reformat -p <preset> <path>");
+                    log::error!("No path specified. Usage: reformat -p <preset> <path>");
                     std::process::exit(1);
                 }
             } else if let Some(job_source) = cli.job {
@@ -1822,7 +1514,7 @@ fn main() -> anyhow::Result<()> {
                     debug!("Running job from '{}'", job_source);
                     run_job(&job_source, path, cli.dry_run)
                 } else {
-                    error!("No path specified. Usage: reformat --job <file|-> <path>");
+                    log::error!("No path specified. Usage: reformat --job <file|-> <path>");
                     std::process::exit(1);
                 }
             } else if let Some(path) = cli.path {
@@ -1831,7 +1523,7 @@ fn main() -> anyhow::Result<()> {
                 run_combined(path, cli.recursive, cli.dry_run)
             } else {
                 // Neither command nor path specified - print help
-                error!("No command or path specified. Use --help for usage information.");
+                log::error!("No command or path specified. Use --help for usage information.");
                 std::process::exit(1);
             }
         }
@@ -1978,6 +1670,8 @@ fn main() -> anyhow::Result<()> {
                 no_interactive,
                 scope,
                 verbose_scan,
+                changes_file,
+                fixes_file,
             } => {
                 debug!("Running group subcommand");
                 run_group(
@@ -1992,6 +1686,8 @@ fn main() -> anyhow::Result<()> {
                     no_interactive,
                     scope,
                     verbose_scan,
+                    changes_file,
+                    fixes_file,
                 )
             }
 
@@ -2044,11 +1740,10 @@ fn main() -> anyhow::Result<()> {
         },
     };
 
-    if let Err(ref e) = result {
-        error!("Operation failed: {}", e);
-    } else {
+    if result.is_ok() {
         debug!("Operation completed successfully");
     }
 
+    // The error itself is reported once, by anyhow's top-level handler.
     result
 }

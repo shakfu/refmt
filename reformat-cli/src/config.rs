@@ -24,11 +24,20 @@ pub fn load_config_from(dir: &Path) -> anyhow::Result<Option<ReformatConfig>> {
     Ok(Some(config))
 }
 
-/// Load and parse `reformat.json` from the current working directory.
-/// Returns `None` if the file does not exist.
+/// Load and parse `reformat.json`, searching the current directory and then
+/// each ancestor. Returns `None` if no config file is found.
+///
+/// Only the current directory used to be searched, so running from a
+/// subdirectory of a project found nothing -- despite the documentation
+/// describing the file as living at the project root.
 pub fn load_config() -> anyhow::Result<Option<ReformatConfig>> {
     let cwd = std::env::current_dir()?;
-    load_config_from(&cwd)
+    for dir in cwd.ancestors() {
+        if let Some(config) = load_config_from(dir)? {
+            return Ok(Some(config));
+        }
+    }
+    Ok(None)
 }
 
 /// Look up a preset by name in the loaded config.
@@ -56,20 +65,24 @@ mod tests {
 
     #[test]
     fn test_load_config_file_not_found() {
-        let tmp = std::env::temp_dir().join("reformat_cfg_missing");
-        let _ = fs::remove_dir_all(&tmp);
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let tmp = _tmp.path().to_path_buf();
         fs::create_dir_all(&tmp).unwrap();
 
         let result = load_config_from(&tmp).unwrap();
         assert!(result.is_none());
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_load_config_valid() {
-        let tmp = std::env::temp_dir().join("reformat_cfg_valid");
-        let _ = fs::remove_dir_all(&tmp);
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let tmp = _tmp.path().to_path_buf();
         fs::create_dir_all(&tmp).unwrap();
 
         fs::write(
@@ -80,22 +93,51 @@ mod tests {
 
         let config = load_config_from(&tmp).unwrap().unwrap();
         assert!(config.contains_key("mypreset"));
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn test_load_config_malformed_json() {
-        let tmp = std::env::temp_dir().join("reformat_cfg_malformed");
-        let _ = fs::remove_dir_all(&tmp);
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let tmp = _tmp.path().to_path_buf();
         fs::create_dir_all(&tmp).unwrap();
 
         fs::write(tmp.join("reformat.json"), "not valid json {{{").unwrap();
 
         let result = load_config_from(&tmp);
         assert!(result.is_err());
+    }
 
-        let _ = fs::remove_dir_all(&tmp);
+    #[test]
+    fn test_load_config_searches_ancestors() {
+        let tmp = tempfile::Builder::new()
+            .prefix("reformat-cfg-")
+            .tempdir()
+            .unwrap();
+        let root = tmp.path();
+        let nested = root.join("src").join("deep");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            root.join("reformat.json"),
+            r#"{"mypreset": {"steps": ["clean"]}}"#,
+        )
+        .unwrap();
+
+        // Found from the root itself...
+        assert!(load_config_from(root).unwrap().is_some());
+        // ...but not by a directory-only lookup further down.
+        assert!(load_config_from(&nested).unwrap().is_none());
+
+        // The ancestor walk finds it from the nested directory.
+        let found = nested
+            .ancestors()
+            .find_map(|d| load_config_from(d).ok().flatten());
+        assert!(
+            found.is_some(),
+            "a preset at the project root should be visible from a subdirectory"
+        );
     }
 
     #[test]

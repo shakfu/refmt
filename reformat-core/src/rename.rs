@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 /// Case transformation options
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -87,6 +86,21 @@ impl Default for RenameOptions {
     }
 }
 
+/// Outcome of a rename run.
+///
+/// A collision used to abort the entire run through `?`, leaving a large tree
+/// half-renamed with no record of what had moved. Failures are now collected
+/// so the run completes and reports what it could not do.
+#[derive(Debug, Clone, Default)]
+pub struct RenameStats {
+    /// Files successfully renamed
+    pub renamed: usize,
+    /// Files left alone because renaming them would have failed
+    pub skipped: usize,
+    /// One message per skipped file
+    pub errors: Vec<String>,
+}
+
 /// File renamer for transforming file names
 pub struct FileRenamer {
     options: RenameOptions,
@@ -118,11 +132,17 @@ impl FileRenamer {
             return false;
         }
 
-        // Skip hidden files
-        if let Some(name) = path.file_name() {
-            if name.to_str().map(|s| s.starts_with('.')).unwrap_or(false) {
-                return false;
-            }
+        // Skip hidden entries and build/vendor directories.
+        // This checks every path component, not just the filename: the walk
+        // must never reach into `.git`, where renaming `HEAD` or `config`
+        // destroys the repository outright. Renames are not journalled, so
+        // there is nothing to undo it with.
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| crate::walk::is_excluded_component(n, crate::walk::DEFAULT_SKIP_DIRS))
+        {
+            return false;
         }
 
         true
@@ -151,79 +171,27 @@ impl FileRenamer {
         }
     }
 
-    /// Formats a timestamp based on file creation time
+    /// Formats a timestamp based on file creation time.
+    ///
+    /// Falls back to the modification time when the filesystem does not record
+    /// a creation time, which is the common case on Linux. The date is the
+    /// local one, matching what the user sees in their file manager.
     fn format_timestamp(&self, path: &Path, separator: char) -> Option<String> {
-        use std::time::SystemTime;
+        use chrono::{DateTime, Local};
+
+        if self.options.timestamp_format == TimestampFormat::None {
+            return None;
+        }
+
+        let metadata = fs::metadata(path).ok()?;
+        let created = metadata.created().or_else(|_| metadata.modified()).ok()?;
+        let datetime: DateTime<Local> = created.into();
 
         match self.options.timestamp_format {
+            TimestampFormat::Long => Some(format!("{}{}", datetime.format("%Y%m%d"), separator)),
+            TimestampFormat::Short => Some(format!("{}{}", datetime.format("%y%m%d"), separator)),
             TimestampFormat::None => None,
-            TimestampFormat::Long | TimestampFormat::Short => {
-                // Get file metadata
-                let metadata = fs::metadata(path).ok()?;
-
-                // Try to get creation time, fall back to modified time
-                let created = metadata.created().or_else(|_| metadata.modified()).ok()?;
-
-                // Convert to duration since epoch
-                let duration = created.duration_since(SystemTime::UNIX_EPOCH).ok()?;
-                let secs = duration.as_secs();
-
-                // Calculate date components (simplified UTC conversion)
-                // Days since Unix epoch
-                let days = secs / 86400;
-
-                // Calculate year, month, day
-                let mut year = 1970;
-                let mut remaining_days = days;
-
-                loop {
-                    let days_in_year = if Self::is_leap_year(year) { 366 } else { 365 };
-                    if remaining_days < days_in_year {
-                        break;
-                    }
-                    remaining_days -= days_in_year;
-                    year += 1;
-                }
-
-                let days_in_months = if Self::is_leap_year(year) {
-                    [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-                } else {
-                    [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-                };
-
-                let mut month = 1;
-                let mut day_of_month = remaining_days + 1;
-
-                for days_in_month in days_in_months.iter() {
-                    if day_of_month <= *days_in_month as u64 {
-                        break;
-                    }
-                    day_of_month -= *days_in_month as u64;
-                    month += 1;
-                }
-
-                // Format based on timestamp format with detected separator
-                match self.options.timestamp_format {
-                    TimestampFormat::Long => Some(format!(
-                        "{:04}{:02}{:02}{}",
-                        year, month, day_of_month, separator
-                    )),
-                    TimestampFormat::Short => Some(format!(
-                        "{:02}{:02}{:02}{}",
-                        year % 100,
-                        month,
-                        day_of_month,
-                        separator
-                    )),
-                    TimestampFormat::None => None,
-                }
-            }
         }
-    }
-
-    /// Checks if a year is a leap year
-    fn is_leap_year(year: u64) -> bool {
-        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
     }
 
     /// Applies all transformations to a filename
@@ -379,22 +347,31 @@ impl FileRenamer {
         }
 
         if self.options.dry_run {
-            println!(
+            log::info!(
                 "Would rename '{}' -> '{}'",
                 path.display(),
                 new_path.display()
             );
         } else {
             fs::rename(path, &new_path)?;
-            println!("Renamed '{}' -> '{}'", path.display(), new_path.display());
+            log::info!("Renamed '{}' -> '{}'", path.display(), new_path.display());
         }
 
         Ok(true)
     }
 
-    /// Processes a directory or file
+    /// Processes a directory or file, returning the number renamed.
+    ///
+    /// Prefer [`FileRenamer::process_with_stats`] when you need to know
+    /// whether anything was skipped.
     pub fn process(&self, path: &Path) -> crate::Result<usize> {
-        let mut renamed_count = 0;
+        Ok(self.process_with_stats(path)?.renamed)
+    }
+
+    /// Processes a directory or file, collecting per-file failures instead of
+    /// aborting on the first one.
+    pub fn process_with_stats(&self, path: &Path) -> crate::Result<RenameStats> {
+        let mut stats = RenameStats::default();
 
         // Check if path itself is a symlink
         let path_is_symlink = path
@@ -403,33 +380,23 @@ impl FileRenamer {
             .unwrap_or(false);
 
         if path.is_file() || path_is_symlink {
-            if self.rename_file(path, path_is_symlink)? {
-                renamed_count = 1;
-            }
+            self.record(self.rename_file(path, path_is_symlink), path, &mut stats);
         } else if path.is_dir() {
             if self.options.recursive {
                 // Collect all files (and optionally symlinks) first to avoid issues with renaming while iterating
-                let include_symlinks = self.options.include_symlinks;
-                let mut files: Vec<(PathBuf, bool)> = WalkDir::new(path)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        let ft = e.file_type();
-                        ft.is_file() || (include_symlinks && ft.is_symlink())
-                    })
-                    .map(|e| {
-                        let is_symlink = e.file_type().is_symlink();
-                        (e.path().to_path_buf(), is_symlink)
-                    })
-                    .collect();
+                let mut files: Vec<(PathBuf, bool)> =
+                    crate::walk::walk_files_and_symlinks(path, true, self.options.include_symlinks)
+                        .collect();
 
                 // Sort by depth (deepest first) to avoid parent directory rename issues
-                files.sort_by(|a, b| b.0.components().count().cmp(&a.0.components().count()));
+                files.sort_by_key(|a| std::cmp::Reverse(a.0.components().count()));
 
                 for (file_path, is_symlink) in files {
-                    if self.rename_file(&file_path, is_symlink)? {
-                        renamed_count += 1;
-                    }
+                    self.record(
+                        self.rename_file(&file_path, is_symlink),
+                        &file_path,
+                        &mut stats,
+                    );
                 }
             } else {
                 let include_symlinks = self.options.include_symlinks;
@@ -451,32 +418,88 @@ impl FileRenamer {
                 files.sort_by(|a, b| a.0.cmp(&b.0));
 
                 for (file_path, is_symlink) in files {
-                    if self.rename_file(&file_path, is_symlink)? {
-                        renamed_count += 1;
-                    }
+                    self.record(
+                        self.rename_file(&file_path, is_symlink),
+                        &file_path,
+                        &mut stats,
+                    );
                 }
             }
         }
 
-        Ok(renamed_count)
+        Ok(stats)
+    }
+
+    /// Folds one file's result into the run statistics, logging any failure.
+    fn record(&self, result: crate::Result<bool>, path: &Path, stats: &mut RenameStats) {
+        match result {
+            Ok(true) => stats.renamed += 1,
+            Ok(false) => {}
+            Err(e) => {
+                let message = format!("{}: {}", path.display(), e);
+                log::warn!("Skipping {}", message);
+                stats.errors.push(message);
+                stats.skipped += 1;
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One collision must not abort the run: the other files still get
+    /// renamed, and the failure is reported rather than swallowed.
+    #[test]
+    fn test_collision_does_not_abort_the_run() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        // "B.txt" cannot become "b.txt" because that name is taken.
+        fs::write(dir.join("b.txt"), "x").unwrap();
+        fs::write(dir.join("B.txt"), "y").unwrap();
+        fs::write(dir.join("C.txt"), "z").unwrap();
+        fs::write(dir.join("D.txt"), "w").unwrap();
+
+        let renamer = FileRenamer::new(RenameOptions {
+            case_transform: CaseTransform::Lowercase,
+            ..Default::default()
+        });
+        let stats = renamer.process_with_stats(&dir).unwrap();
+
+        assert_eq!(stats.renamed, 2, "C.txt and D.txt should still be renamed");
+        assert_eq!(
+            stats.skipped, 1,
+            "the collision should be counted, not fatal"
+        );
+        assert_eq!(stats.errors.len(), 1);
+        assert!(dir.join("c.txt").exists());
+        assert!(dir.join("d.txt").exists());
+    }
     use std::fs;
 
     #[test]
     fn test_lowercase_transform() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_lowercase");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("TestFile.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Lowercase;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Lowercase,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -485,20 +508,25 @@ mod tests {
         let new_file = test_dir.join("testfile.txt");
         assert!(new_file.exists());
         assert_eq!(fs::read_to_string(&new_file).unwrap(), "content");
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_uppercase_transform() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_uppercase");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("testfile.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Uppercase;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Uppercase,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -507,20 +535,25 @@ mod tests {
         let new_file = test_dir.join("TESTFILE.txt");
         assert!(new_file.exists());
         assert_eq!(fs::read_to_string(&new_file).unwrap(), "content");
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_capitalize_transform() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_capitalize");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("testFile.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Capitalize;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Capitalize,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -529,13 +562,15 @@ mod tests {
         let new_file = test_dir.join("Testfile.txt");
         assert!(new_file.exists());
         assert_eq!(fs::read_to_string(&new_file).unwrap(), "content");
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_separators_to_underscore() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_underscore");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         // Test space to underscore
@@ -550,8 +585,11 @@ mod tests {
         let test_file3 = test_dir.join("test-file 3.txt");
         fs::write(&test_file3, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.space_replace = SpaceReplace::Underscore;
+        let opts = RenameOptions {
+            space_replace: SpaceReplace::Underscore,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_dir).unwrap();
@@ -560,13 +598,15 @@ mod tests {
         assert!(test_dir.join("test_file.txt").exists());
         assert!(test_dir.join("test_file2.txt").exists());
         assert!(test_dir.join("test_file_3.txt").exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_separators_to_hyphen() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_hyphen");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         // Test space to hyphen
@@ -581,8 +621,11 @@ mod tests {
         let test_file3 = test_dir.join("test_file 3.txt");
         fs::write(&test_file3, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.space_replace = SpaceReplace::Hyphen;
+        let opts = RenameOptions {
+            space_replace: SpaceReplace::Hyphen,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_dir).unwrap();
@@ -591,20 +634,25 @@ mod tests {
         assert!(test_dir.join("test-file.txt").exists());
         assert!(test_dir.join("test-file2.txt").exists());
         assert!(test_dir.join("test-file-3.txt").exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_add_prefix() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_add_prefix");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("file.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.add_prefix = Some("new_".to_string());
+        let opts = RenameOptions {
+            add_prefix: Some("new_".to_string()),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -612,20 +660,25 @@ mod tests {
         assert_eq!(count, 1);
         assert!(test_dir.join("new_file.txt").exists());
         assert!(!test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_remove_prefix() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_rm_prefix");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("old_file.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.remove_prefix = Some("old_".to_string());
+        let opts = RenameOptions {
+            remove_prefix: Some("old_".to_string()),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -633,20 +686,25 @@ mod tests {
         assert_eq!(count, 1);
         assert!(test_dir.join("file.txt").exists());
         assert!(!test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_add_suffix() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_add_suffix");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("file.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.add_suffix = Some("_backup".to_string());
+        let opts = RenameOptions {
+            add_suffix: Some("_backup".to_string()),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -654,20 +712,25 @@ mod tests {
         assert_eq!(count, 1);
         assert!(test_dir.join("file_backup.txt").exists());
         assert!(!test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_remove_suffix() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_rm_suffix");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("file_old.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.remove_suffix = Some("_old".to_string());
+        let opts = RenameOptions {
+            remove_suffix: Some("_old".to_string()),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -675,23 +738,31 @@ mod tests {
         assert_eq!(count, 1);
         assert!(test_dir.join("file.txt").exists());
         assert!(!test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_combined_transforms() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_combined");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("old_Test File.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.remove_prefix = Some("old_".to_string());
-        opts.space_replace = SpaceReplace::Underscore;
-        opts.case_transform = CaseTransform::Lowercase;
-        opts.add_suffix = Some("_new".to_string());
+        let opts = RenameOptions {
+            remove_prefix: Some("old_".to_string()),
+
+            space_replace: SpaceReplace::Underscore,
+
+            case_transform: CaseTransform::Lowercase,
+
+            add_suffix: Some("_new".to_string()),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -699,22 +770,28 @@ mod tests {
         assert_eq!(count, 1);
         assert!(test_dir.join("test_file_new.txt").exists());
         assert!(!test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_dry_run_mode() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_dry");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("TestFile.txt");
         let original_content = "content";
         fs::write(&test_file, original_content).unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Lowercase;
-        opts.dry_run = true;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Lowercase,
+
+            dry_run: true,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -723,20 +800,25 @@ mod tests {
         // File should still exist and be unchanged in dry run
         assert!(test_file.exists());
         assert_eq!(fs::read_to_string(&test_file).unwrap(), original_content);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_skip_hidden_files() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_hidden");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let hidden_file = test_dir.join(".hidden.txt");
         fs::write(&hidden_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Uppercase;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Uppercase,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&hidden_file).unwrap();
@@ -744,13 +826,15 @@ mod tests {
         // Hidden file should be skipped
         assert_eq!(count, 0);
         assert!(hidden_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_recursive_processing() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_recursive");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let sub_dir = test_dir.join("subdir");
@@ -762,9 +846,13 @@ mod tests {
         fs::write(&file1, "content1").unwrap();
         fs::write(&file2, "content2").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Lowercase;
-        opts.recursive = true;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Lowercase,
+
+            recursive: true,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_dir).unwrap();
@@ -772,20 +860,25 @@ mod tests {
         assert_eq!(count, 2);
         assert!(test_dir.join("file1.txt").exists());
         assert!(sub_dir.join("file2.txt").exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_no_extension_file() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_no_ext");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("TestFile");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Lowercase;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Lowercase,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -794,21 +887,26 @@ mod tests {
         let new_file = test_dir.join("testfile");
         assert!(new_file.exists());
         assert_eq!(fs::read_to_string(&new_file).unwrap(), "content");
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_timestamp_long_format() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_timestamp_long");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         let _ = fs::remove_dir_all(&test_dir); // Clean up first
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("document.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.timestamp_format = TimestampFormat::Long;
+        let opts = RenameOptions {
+            timestamp_format: TimestampFormat::Long,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -841,21 +939,26 @@ mod tests {
             file_name.ends_with("document.txt"),
             "Should end with original name"
         );
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_timestamp_short_format() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_timestamp_short");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         let _ = fs::remove_dir_all(&test_dir); // Clean up first
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("notes.md");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.timestamp_format = TimestampFormat::Short;
+        let opts = RenameOptions {
+            timestamp_format: TimestampFormat::Short,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -888,22 +991,29 @@ mod tests {
             file_name.ends_with("notes.md"),
             "Should end with original name"
         );
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_timestamp_with_other_transforms() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_timestamp_combined");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("My Document.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.timestamp_format = TimestampFormat::Long;
-        opts.space_replace = SpaceReplace::Underscore;
-        opts.case_transform = CaseTransform::Lowercase;
+        let opts = RenameOptions {
+            timestamp_format: TimestampFormat::Long,
+
+            space_replace: SpaceReplace::Underscore,
+
+            case_transform: CaseTransform::Lowercase,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -922,20 +1032,25 @@ mod tests {
         assert!(file_name.contains("my_document.txt"));
         assert!(!file_name.contains(" "));
         assert!(!file_name.contains("My"));
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_timestamp_separator_detection_hyphen() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_timestamp_hyphen");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("my-document-file.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.timestamp_format = TimestampFormat::Long;
+        let opts = RenameOptions {
+            timestamp_format: TimestampFormat::Long,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -956,20 +1071,25 @@ mod tests {
             "Timestamp should use hyphen separator"
         );
         assert!(file_name.ends_with("my-document-file.txt"));
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_timestamp_separator_detection_underscore() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_timestamp_underscore");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("my_document_file.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.timestamp_format = TimestampFormat::Short;
+        let opts = RenameOptions {
+            timestamp_format: TimestampFormat::Short,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -990,13 +1110,15 @@ mod tests {
             "Timestamp should use underscore separator"
         );
         assert!(file_name.ends_with("my_document_file.txt"));
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_timestamp_separator_detection_mixed() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_timestamp_mixed");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         let _ = fs::remove_dir_all(&test_dir); // Clean up first
         fs::create_dir_all(&test_dir).unwrap();
 
@@ -1004,8 +1126,11 @@ mod tests {
         let test_file1 = test_dir.join("my-document-file_v2.txt");
         fs::write(&test_file1, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.timestamp_format = TimestampFormat::Long;
+        let opts = RenameOptions {
+            timestamp_format: TimestampFormat::Long,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file1).unwrap();
@@ -1024,20 +1149,25 @@ mod tests {
             "-",
             "Should use hyphen for mixed with more hyphens"
         );
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_timestamp_separator_detection_no_separator() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_timestamp_nosep");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("mydocument.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.timestamp_format = TimestampFormat::Long;
+        let opts = RenameOptions {
+            timestamp_format: TimestampFormat::Long,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -1053,20 +1183,25 @@ mod tests {
         // Should default to hyphen when no separators
         assert_eq!(&file_name[8..9], "-", "Should default to hyphen");
         assert!(file_name.ends_with("mydocument.txt"));
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_timestamp_separator_detection_spaces() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_timestamp_spaces");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("my document file.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.timestamp_format = TimestampFormat::Long;
+        let opts = RenameOptions {
+            timestamp_format: TimestampFormat::Long,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -1086,20 +1221,25 @@ mod tests {
             "Should use hyphen for space-separated files"
         );
         assert!(file_name.ends_with("my document file.txt"));
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_replace_prefix() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_replace_prefix");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("old_file.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.replace_prefix = Some(("old_".to_string(), "new_".to_string()));
+        let opts = RenameOptions {
+            replace_prefix: Some(("old_".to_string(), "new_".to_string())),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -1107,20 +1247,25 @@ mod tests {
         assert_eq!(count, 1);
         assert!(test_dir.join("new_file.txt").exists());
         assert!(!test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_replace_prefix_no_match() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_replace_prefix_nomatch");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("other_file.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.replace_prefix = Some(("old_".to_string(), "new_".to_string()));
+        let opts = RenameOptions {
+            replace_prefix: Some(("old_".to_string(), "new_".to_string())),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -1128,20 +1273,25 @@ mod tests {
         // File should not be renamed since prefix doesn't match
         assert_eq!(count, 0);
         assert!(test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_replace_suffix() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_replace_suffix");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("file_old.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.replace_suffix = Some(("_old".to_string(), "_new".to_string()));
+        let opts = RenameOptions {
+            replace_suffix: Some(("_old".to_string(), "_new".to_string())),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -1149,20 +1299,25 @@ mod tests {
         assert_eq!(count, 1);
         assert!(test_dir.join("file_new.txt").exists());
         assert!(!test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_replace_suffix_no_match() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_replace_suffix_nomatch");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("file_other.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.replace_suffix = Some(("_old".to_string(), "_new".to_string()));
+        let opts = RenameOptions {
+            replace_suffix: Some(("_old".to_string(), "_new".to_string())),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -1170,21 +1325,27 @@ mod tests {
         // File should not be renamed since suffix doesn't match
         assert_eq!(count, 0);
         assert!(test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_replace_prefix_and_suffix_combined() {
-        let test_dir = std::env::temp_dir().join("reformat_rename_replace_both");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("old_file_v1.txt");
         fs::write(&test_file, "content").unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.replace_prefix = Some(("old_".to_string(), "new_".to_string()));
-        opts.replace_suffix = Some(("_v1".to_string(), "_v2".to_string()));
+        let opts = RenameOptions {
+            replace_prefix: Some(("old_".to_string(), "new_".to_string())),
+
+            replace_suffix: Some(("_v1".to_string(), "_v2".to_string())),
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_file).unwrap();
@@ -1192,8 +1353,6 @@ mod tests {
         assert_eq!(count, 1);
         assert!(test_dir.join("new_file_v2.txt").exists());
         assert!(!test_file.exists());
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[cfg(unix)]
@@ -1201,8 +1360,15 @@ mod tests {
     fn test_symlinks_skipped_by_default() {
         use std::os::unix::fs::symlink;
 
-        let test_dir = std::env::temp_dir().join("reformat_rename_symlink_skip");
-        let _ = fs::remove_dir_all(&test_dir);
+        // A unique directory per test: these run in parallel, and a shared
+
+        // fixture path lets them clobber each other. TempDir also cleans up
+
+        // when a test panics, which explicit teardown at the end does not.
+
+        let _tmp = tempfile::tempdir().unwrap();
+
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         // Create a regular file with uppercase name
@@ -1213,8 +1379,11 @@ mod tests {
         let symlink_file = test_dir.join("SymLink.txt");
         symlink(&target_file, &symlink_file).unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Lowercase;
+        let mut opts = RenameOptions {
+            case_transform: CaseTransform::Lowercase,
+
+            ..Default::default()
+        };
         opts.include_symlinks = false; // default
 
         let renamer = FileRenamer::new(opts);
@@ -1234,8 +1403,6 @@ mod tests {
             entries.iter().any(|n| n == "SymLink.txt"),
             "Symlink should retain original uppercase name"
         );
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[cfg(unix)]
@@ -1243,8 +1410,15 @@ mod tests {
     fn test_symlinks_included_when_enabled() {
         use std::os::unix::fs::symlink;
 
-        let test_dir = std::env::temp_dir().join("reformat_rename_symlink_include");
-        let _ = fs::remove_dir_all(&test_dir);
+        // A unique directory per test: these run in parallel, and a shared
+
+        // fixture path lets them clobber each other. TempDir also cleans up
+
+        // when a test panics, which explicit teardown at the end does not.
+
+        let _tmp = tempfile::tempdir().unwrap();
+
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         // Create a regular file (already lowercase)
@@ -1255,9 +1429,13 @@ mod tests {
         let symlink_file = test_dir.join("SymLink.txt");
         symlink(&target_file, &symlink_file).unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Lowercase;
-        opts.include_symlinks = true;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Lowercase,
+
+            include_symlinks: true,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_dir).unwrap();
@@ -1280,8 +1458,6 @@ mod tests {
             !entries.iter().any(|n| n == "SymLink.txt"),
             "Original uppercase symlink name should be gone"
         );
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[cfg(unix)]
@@ -1289,8 +1465,15 @@ mod tests {
     fn test_symlink_with_uppercase_target() {
         use std::os::unix::fs::symlink;
 
-        let test_dir = std::env::temp_dir().join("reformat_rename_symlink_both");
-        let _ = fs::remove_dir_all(&test_dir);
+        // A unique directory per test: these run in parallel, and a shared
+
+        // fixture path lets them clobber each other. TempDir also cleans up
+
+        // when a test panics, which explicit teardown at the end does not.
+
+        let _tmp = tempfile::tempdir().unwrap();
+
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         // Create a regular file with uppercase
@@ -1301,9 +1484,13 @@ mod tests {
         let symlink_file = test_dir.join("SymLink.txt");
         symlink(&target_file, &symlink_file).unwrap();
 
-        let mut opts = RenameOptions::default();
-        opts.case_transform = CaseTransform::Lowercase;
-        opts.include_symlinks = true;
+        let opts = RenameOptions {
+            case_transform: CaseTransform::Lowercase,
+
+            include_symlinks: true,
+
+            ..Default::default()
+        };
 
         let renamer = FileRenamer::new(opts);
         let count = renamer.process(&test_dir).unwrap();
@@ -1325,7 +1512,5 @@ mod tests {
             entries.iter().any(|n| n == "symlink.txt"),
             "Symlink should be renamed to lowercase"
         );
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 }

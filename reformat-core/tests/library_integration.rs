@@ -6,7 +6,11 @@ use std::fs;
 #[test]
 fn test_library_basic_conversion() {
     // Create a temporary test file
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_basic");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -42,12 +46,15 @@ fn test_library_basic_conversion() {
     assert!(!content.contains("anotherVar"));
 
     // Cleanup
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_with_prefix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_prefix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.js");
@@ -76,13 +83,15 @@ fn test_library_with_prefix() {
 
     let content = fs::read_to_string(&test_file).unwrap();
     assert!(content.contains("old_user_name"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_with_suffix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_suffix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.ts");
@@ -111,13 +120,15 @@ fn test_library_with_suffix() {
 
     let content = fs::read_to_string(&test_file).unwrap();
     assert!(content.contains("my_value_v2"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_dry_run() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_dry");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -148,13 +159,15 @@ fn test_library_dry_run() {
     // Verify file unchanged
     let content = fs::read_to_string(&test_file).unwrap();
     assert_eq!(content, original_content);
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_recursive() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_recursive");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     // Create nested structure
@@ -194,13 +207,15 @@ fn test_library_recursive() {
 
     assert!(content1.contains("top_level"));
     assert!(content2.contains("nested_var"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_word_filter() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_filter");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -239,14 +254,12 @@ fn test_library_word_filter() {
     // myVariable should NOT be converted (doesn't match filter)
     assert!(content.contains("myVariable"));
     assert!(!content.contains("my_variable"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_all_case_formats() {
     // Test conversion between all major formats
-    let test_cases = vec![
+    let test_cases = [
         (
             CaseFormat::CamelCase,
             CaseFormat::SnakeCase,
@@ -285,8 +298,12 @@ fn test_library_all_case_formats() {
         ),
     ];
 
-    for (idx, (from, to, input, expected)) in test_cases.iter().enumerate() {
-        let test_dir = std::env::temp_dir().join(format!("reformat_test_lib_formats_{}", idx));
+    for (from, to, input, expected) in test_cases.iter() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -319,14 +336,16 @@ fn test_library_all_case_formats() {
             "Failed conversion from {:?} to {:?}",
             from, to
         );
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 }
 
 #[test]
 fn test_library_strip_prefix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_strip_prefix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.cpp");
@@ -359,13 +378,15 @@ fn test_library_strip_prefix() {
     assert!(content.contains("user_name"));
     // MyUserId -> UserId (strip My) -> user_id (convert)
     assert!(content.contains("user_id"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_strip_suffix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_strip_suffix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -398,13 +419,15 @@ fn test_library_strip_suffix() {
     // user_id_tmp -> user_id (strip "_tmp") -> userId (convert to camelCase)
     assert!(content.contains("userId"));
     assert!(!content.contains("_tmp"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_replace_prefix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_replace_prefix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.java");
@@ -441,13 +464,15 @@ fn test_library_replace_prefix() {
     assert!(content.contains("new_user_service"));
     // OldDataProvider -> NewDataProvider -> new_data_provider
     assert!(content.contains("new_data_provider"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_library_strip_and_add_prefix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_lib_strip_and_add");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.c");
@@ -480,6 +505,4 @@ fn test_library_strip_and_add_prefix() {
     assert!(content.contains("new_user_name"));
     // OldUserId -> UserId (strip) -> user_id (convert) -> new_user_id (add prefix)
     assert!(content.contains("new_user_id"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }

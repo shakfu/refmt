@@ -10,13 +10,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The tool manipulates filenames and case, and carries an explicit
+  # case-insensitive-filesystem branch in the renamer. Testing only on Linux
+  # left that branch, and every path-separator assumption, unexercised.
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+
+  # The declared MSRV must actually build, or users on an older toolchain get
+  # a confusing compile error instead of a clear version message.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.82
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
 
   clippy:
     runs-on: ubuntu-latest
@@ -26,7 +43,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   fmt:
     runs-on: ubuntu-latest
@@ -36,3 +53,12 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+
+  # LTO and codegen-units=1 can surface errors a debug build does not.
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --workspace

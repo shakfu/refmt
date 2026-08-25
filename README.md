@@ -18,7 +18,7 @@ pipelines, or called directly as a Rust library from `reformat-core`.
 |---|---|---|
 | `FileRenamer` | `rename_files` | Case transforms, prefix/suffix operations, timestamps on filenames |
 | `CaseConverter` | `convert` | Convert identifiers between 6 case formats (camel, pascal, snake, screaming snake, kebab, screaming kebab) |
-| `WhitespaceCleaner` | `clean` | Strip trailing whitespace while preserving line endings |
+| `WhitespaceCleaner` | `clean` | Strip trailing whitespace, preserving each line's original terminator |
 | `EmojiTransformer` | `emojis` | Replace task/status emojis with text alternatives, remove decorative emojis |
 | `FileGrouper` | `group` | Organise files by common prefix into subdirectories, detect and fix broken references |
 | `EndingsNormalizer` | `endings` | Normalise line endings to LF, CRLF, or CR (skips binary files automatically) |
@@ -28,7 +28,16 @@ pipelines, or called directly as a Rust library from `reformat-core`.
 
 All transformers share common behaviours: recursive directory traversal,
 file extension filtering, dry-run mode, and automatic skipping of hidden files
-and build directories (`.git`, `node_modules`, `target`, `__pycache__`, etc.).
+and build directories (`.git`, `node_modules`, `target`, `dist`, `vendor`,
+`__pycache__`, `venv`, `.venv`, `build`).
+
+Exclusion is applied while walking, so those subtrees are never descended into.
+A directory you name explicitly is always processed, even if it is hidden --
+`reformat clean ~/.config/nvim` works -- with the exception of the metadata and
+build directories above, which are refused even when named directly.
+
+Binary files and files that are not valid UTF-8 are skipped with a warning
+rather than aborting the run.
 
 ### Pipelines: presets and jobs
 
@@ -70,8 +79,8 @@ cat normalize.json | reformat --job - src/
 ### Quick processing (default command)
 
 For the common case of cleaning up a directory, `reformat <path>` runs three
-transformations in a single optimised pass -- rename to lowercase, replace task
-emojis, strip trailing whitespace -- without needing a config file.
+transformations -- rename to lowercase, replace task emojis, strip trailing
+whitespace -- without needing a config file. Add `-r` to recurse.
 
 ### Library-first design
 
@@ -85,9 +94,43 @@ The project is organised as a Cargo workspace:
 
 ### Observability
 
-- Multi-level verbosity (`-v`, `-vv`, `-vvv`), quiet mode (`-q`), file logging (`--log-file`)
-- Progress spinners, automatic operation timing, colour-coded output
-- Dry-run mode on every transformer and every pipeline step
+- Per-file reporting by default; `-v` and `-vv` add diagnostics, `-q` silences
+  everything but errors. Transformers report through the `log` facade, so a
+  library consumer controls this too.
+- File logging (`--log-file`) keeps full detail with timestamps
+- Dry-run mode on every transformer and every pipeline step, leaving nothing
+  behind on disk
+- Non-zero exit status on failure, including a path that does not exist
+
+## Before you run it
+
+Transformations are applied **in place and are not reversible**. `reformat` has
+no undo, and only `group` records what it did.
+
+- Run against a clean working tree, or a backup.
+- Try `--dry-run` (`-d`) first. It reports exactly what would change and writes
+  nothing.
+- Start narrow. `--extensions` and `--glob` limit the blast radius.
+
+## Caveats
+
+`convert` and `replace` operate on text with regular expressions, not on parsed
+syntax. They do not know what is code, what is a comment, and what is a string
+literal, and they will rewrite matches in all three. This is the right trade-off
+for a tool meant to work across languages, but it means the output of a
+whole-tree `convert` deserves review before committing.
+
+Related limits worth knowing:
+
+- `convert` matches identifiers by shape. A single capitalised word is not a
+  PascalCase candidate, so ordinary prose is left alone.
+- `indent` rewrites leading whitespace only. It cannot tell an indentation tab
+  from an alignment tab, so hand-aligned continuation lines may shift.
+- `emojis` removes characters by Unicode range. Genuine emoji are removed and
+  ordinary text symbols such as card suits and musical notes are preserved, but
+  the boundary between the two is a judgement call, not a standard.
+- `group`'s reference fixing matches filenames, and only rewrites the exact
+  occurrences it recorded. Review `fixes.json` before applying it.
 
 ## Installation
 
@@ -101,6 +144,12 @@ Or install from the workspace:
 
 ```bash
 cargo install --path reformat-cli
+```
+
+Or with `make` (override the location with `PREFIX`):
+
+```bash
+make install PREFIX=~/.local
 ```
 
 Or build from source:
@@ -117,7 +166,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-reformat-core = "0.1.6"
+reformat-core = "0.1.7"
 ```
 
 ### Case Conversion

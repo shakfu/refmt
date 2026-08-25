@@ -176,7 +176,11 @@ mod tests {
 
     #[test]
     fn test_write_and_read() {
-        let test_dir = std::env::temp_dir().join("reformat_changes_test");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         let _ = fs::create_dir_all(&test_dir);
         let file_path = test_dir.join("changes.json");
 
@@ -187,7 +191,5 @@ mod tests {
         let loaded = ChangeRecord::read_from_file(&file_path).unwrap();
         assert_eq!(loaded.operation, "group");
         assert_eq!(loaded.len(), 1);
-
-        let _ = fs::remove_dir_all(&test_dir);
     }
 }

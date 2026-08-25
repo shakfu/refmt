@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
 /// Options for whitespace cleaning
 #[derive(Debug, Clone)]
@@ -58,32 +57,12 @@ impl WhitespaceCleaner {
             return false;
         }
 
-        // Skip hidden files and directories
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| s.starts_with('.'))
-                .unwrap_or(false)
-        }) {
-            return false;
-        }
-
-        // Skip build directories
-        let skip_dirs = [
-            "build",
-            "__pycache__",
-            ".git",
-            "node_modules",
-            "venv",
-            ".venv",
-            "target",
-        ];
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| skip_dirs.contains(&s))
-                .unwrap_or(false)
-        }) {
+        // Skip hidden entries and build/vendor directories (see crate::walk)
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| crate::walk::is_excluded_component(n, crate::walk::DEFAULT_SKIP_DIRS))
+        {
             return false;
         }
 
@@ -102,40 +81,40 @@ impl WhitespaceCleaner {
             return Ok(0);
         }
 
-        let content = fs::read_to_string(path)?;
-        let lines: Vec<&str> = content.lines().collect();
-        let mut cleaned_lines = Vec::new();
+        let content = match crate::text::read_text(path)? {
+            Some(c) => c,
+            None => return Ok(0),
+        };
+        let mut cleaned_content = String::with_capacity(content.len());
         let mut modified_count = 0;
 
-        for line in &lines {
-            if self.options.remove_trailing {
-                let cleaned = line.trim_end();
-                if cleaned != *line {
-                    modified_count += 1;
-                }
-                cleaned_lines.push(cleaned);
+        // Split so that each line's terminator stays attached to that line.
+        // Trimming must only touch the body: rejoining with a fixed "\n"
+        // would rewrite a CRLF file as LF as a side effect of stripping
+        // whitespace.
+        for (body, terminator) in crate::lines::split_lines(&content) {
+            let cleaned = if self.options.remove_trailing {
+                body.trim_end()
             } else {
-                cleaned_lines.push(*line);
+                body
+            };
+            if cleaned != body {
+                modified_count += 1;
             }
+            cleaned_content.push_str(cleaned);
+            cleaned_content.push_str(terminator);
         }
-
-        // Check if file ends with newline
-        let ends_with_newline = content.ends_with('\n');
 
         if modified_count > 0 {
             if self.options.dry_run {
-                println!(
+                log::info!(
                     "Would clean {} lines in '{}'",
                     modified_count,
                     path.display()
                 );
             } else {
-                let mut cleaned_content = cleaned_lines.join("\n");
-                if ends_with_newline {
-                    cleaned_content.push('\n');
-                }
                 fs::write(path, cleaned_content)?;
-                println!("Cleaned {} lines in '{}'", modified_count, path.display());
+                log::info!("Cleaned {} lines in '{}'", modified_count, path.display());
             }
         }
 
@@ -154,27 +133,11 @@ impl WhitespaceCleaner {
                 total_lines = lines;
             }
         } else if path.is_dir() {
-            if self.options.recursive {
-                for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-                    if entry.file_type().is_file() {
-                        let lines = self.clean_file(entry.path())?;
-                        if lines > 0 {
-                            total_files += 1;
-                            total_lines += lines;
-                        }
-                    }
-                }
-            } else {
-                for entry in fs::read_dir(path)? {
-                    let entry = entry?;
-                    let entry_path = entry.path();
-                    if entry_path.is_file() {
-                        let lines = self.clean_file(&entry_path)?;
-                        if lines > 0 {
-                            total_files += 1;
-                            total_lines += lines;
-                        }
-                    }
+            for entry in crate::walk::walk_files(path, self.options.recursive) {
+                let lines = self.clean_file(entry.path())?;
+                if lines > 0 {
+                    total_files += 1;
+                    total_lines += lines;
                 }
             }
         }
@@ -186,11 +149,41 @@ impl WhitespaceCleaner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A binary or non-UTF-8 file carrying a processed extension must be
+    /// skipped without aborting the walk over its siblings.
+    #[test]
+    fn test_binary_and_non_utf8_files_are_skipped() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        fs::write(dir.join("a_binary.txt"), [0x00, 0x01, 0x02]).unwrap();
+        fs::write(dir.join("b_latin1.txt"), [b'x', b' ', b' ', 0xE9, b'\n']).unwrap();
+        fs::write(dir.join("c_ok.txt"), "text  \n").unwrap();
+
+        let cleaner = WhitespaceCleaner::with_defaults();
+        let (files, _) = cleaner.process(&dir).unwrap();
+
+        assert_eq!(files, 1, "the walk should continue past unreadable files");
+        assert_eq!(fs::read_to_string(dir.join("c_ok.txt")).unwrap(), "text\n");
+        assert_eq!(
+            fs::read(dir.join("a_binary.txt")).unwrap(),
+            [0x00, 0x01, 0x02]
+        );
+    }
     use std::fs;
 
     #[test]
     fn test_remove_trailing_whitespace() {
-        let test_dir = std::env::temp_dir().join("reformat_whitespace_test");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -204,39 +197,95 @@ mod tests {
 
         let content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, "line1\nline2\nline3\n");
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
+    /// Trailing whitespace must be stripped without rewriting the file's line
+    /// terminators. Cleaning a CRLF file used to silently convert it to LF,
+    /// turning a whitespace tidy-up into a whole-file diff.
     #[test]
     fn test_preserve_line_endings() {
-        let test_dir = std::env::temp_dir().join("reformat_whitespace_endings");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&test_dir).unwrap();
+
+        // (input, expected output)
+        let cases = [
+            ("lf", "line1  \nline2\n", "line1\nline2\n"),
+            ("crlf", "line1  \r\nline2\r\n", "line1\r\nline2\r\n"),
+            ("cr", "line1  \rline2\r", "line1\rline2\r"),
+            (
+                "mixed",
+                "line1  \r\nline2  \nline3  \r",
+                "line1\r\nline2\nline3\r",
+            ),
+            // Trailing whitespace on the final line, with no terminator at all.
+            ("no_final_newline", "line1  \nline2  ", "line1\nline2"),
+            // A file that ends with a blank line keeps that blank line.
+            ("blank_last", "line1  \n\n", "line1\n\n"),
+            // Whitespace-only lines collapse to empty, terminator preserved.
+            ("ws_only", "a\r\n   \r\nb\r\n", "a\r\n\r\nb\r\n"),
+        ];
+
+        for (name, input, expected) in cases {
+            let test_file = test_dir.join(format!("{}.txt", name));
+            fs::write(&test_file, input).unwrap();
+
+            let cleaner = WhitespaceCleaner::with_defaults();
+            cleaner.process(&test_file).unwrap();
+
+            let content = fs::read_to_string(&test_file).unwrap();
+            assert_eq!(
+                content, expected,
+                "case '{}': line endings were not preserved",
+                name
+            );
+        }
+    }
+
+    /// A file with no trailing whitespace must not be rewritten at all --
+    /// in particular a CRLF file must not be "normalised" as a side effect.
+    #[test]
+    fn test_clean_file_untouched_when_nothing_to_strip() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
-        fs::write(&test_file, "line1  \nline2\n").unwrap();
+        let original = "line1\r\nline2\r\n";
+        fs::write(&test_file, original).unwrap();
 
         let cleaner = WhitespaceCleaner::with_defaults();
-        cleaner.process(&test_file).unwrap();
+        let (files, lines) = cleaner.process(&test_file).unwrap();
 
-        let content = fs::read_to_string(&test_file).unwrap();
-        assert!(content.ends_with('\n'));
-        assert_eq!(content, "line1\nline2\n");
-
-        fs::remove_dir_all(&test_dir).unwrap();
+        assert_eq!(files, 0);
+        assert_eq!(lines, 0);
+        assert_eq!(fs::read_to_string(&test_file).unwrap(), original);
     }
 
     #[test]
     fn test_dry_run_mode() {
-        let test_dir = std::env::temp_dir().join("reformat_whitespace_dry");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
         let original = "line1   \nline2\n";
         fs::write(&test_file, original).unwrap();
 
-        let mut opts = WhitespaceOptions::default();
-        opts.dry_run = true;
+        let opts = WhitespaceOptions {
+            dry_run: true,
+
+            ..Default::default()
+        };
 
         let cleaner = WhitespaceCleaner::new(opts);
         cleaner.process(&test_file).unwrap();
@@ -244,13 +293,15 @@ mod tests {
         // File should be unchanged
         let content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, original);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_skip_hidden_files() {
-        let test_dir = std::env::temp_dir().join("reformat_whitespace_hidden");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let hidden_file = test_dir.join(".hidden.txt");
@@ -261,13 +312,15 @@ mod tests {
 
         // Hidden file should be skipped
         assert_eq!(files, 0);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_file_extension_filtering() {
-        let test_dir = std::env::temp_dir().join("reformat_whitespace_ext");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let txt_file = test_dir.join("test.txt");
@@ -276,8 +329,11 @@ mod tests {
         fs::write(&txt_file, "line1   \n").unwrap();
         fs::write(&other_file, "line1   \n").unwrap();
 
-        let mut opts = WhitespaceOptions::default();
-        opts.file_extensions = vec![".txt".to_string()];
+        let opts = WhitespaceOptions {
+            file_extensions: vec![".txt".to_string()],
+
+            ..Default::default()
+        };
 
         let cleaner = WhitespaceCleaner::new(opts);
         let (files, _) = cleaner.process(&test_dir).unwrap();
@@ -290,13 +346,15 @@ mod tests {
 
         assert_eq!(txt_content, "line1\n");
         assert_eq!(other_content, "line1   \n"); // Unchanged
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_recursive_processing() {
-        let test_dir = std::env::temp_dir().join("reformat_whitespace_recursive");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let sub_dir = test_dir.join("subdir");
@@ -313,7 +371,5 @@ mod tests {
 
         assert_eq!(files, 2);
         assert_eq!(lines, 2);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 }

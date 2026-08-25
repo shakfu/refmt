@@ -171,11 +171,17 @@ impl FileGrouper {
         // Analyze directory for prefixes
         let prefix_map = self.analyze_directory(dir)?;
 
-        // Process each prefix group that meets the minimum count
-        for (prefix, files) in prefix_map {
+        // Iterate in sorted order. A HashMap's iteration order varies between
+        // runs, which made the directories created, the lines printed, and the
+        // contents of changes.json all non-reproducible.
+        let mut groups: Vec<(String, Vec<PathBuf>)> = prefix_map.into_iter().collect();
+        groups.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (prefix, mut files) in groups {
             if files.len() < self.options.min_count {
                 continue;
             }
+            files.sort();
 
             // Create subdirectory path
             let subdir = dir.join(&prefix);
@@ -183,10 +189,10 @@ impl FileGrouper {
             // Create directory if it doesn't exist
             if !subdir.exists() {
                 if self.options.dry_run {
-                    println!("Would create directory: {}", subdir.display());
+                    log::info!("Would create directory: {}", subdir.display());
                 } else {
                     fs::create_dir(&subdir)?;
-                    println!("Created directory: {}", subdir.display());
+                    log::info!("Created directory: {}", subdir.display());
                 }
                 // Record the directory creation (relative to base_dir)
                 let rel_path = subdir.strip_prefix(base_dir).unwrap_or(&subdir);
@@ -212,7 +218,7 @@ impl FileGrouper {
 
                 // Check if target already exists
                 if new_path.exists() {
-                    eprintln!(
+                    log::warn!(
                         "Warning: Target file already exists, skipping: {}",
                         new_path.display()
                     );
@@ -225,14 +231,14 @@ impl FileGrouper {
 
                 if self.options.dry_run {
                     if self.options.strip_prefix && new_filename != filename {
-                        println!(
+                        log::info!(
                             "Would move and rename '{}' -> '{}'",
                             file_path.display(),
                             new_path.display()
                         );
                         stats.files_renamed += 1;
                     } else {
-                        println!(
+                        log::info!(
                             "Would move '{}' -> '{}'",
                             file_path.display(),
                             new_path.display()
@@ -241,14 +247,14 @@ impl FileGrouper {
                 } else {
                     fs::rename(&file_path, &new_path)?;
                     if self.options.strip_prefix && new_filename != filename {
-                        println!(
+                        log::info!(
                             "Moved and renamed '{}' -> '{}'",
                             file_path.display(),
                             new_path.display()
                         );
                         stats.files_renamed += 1;
                     } else {
-                        println!(
+                        log::info!(
                             "Moved '{}' -> '{}'",
                             file_path.display(),
                             new_path.display()
@@ -285,24 +291,22 @@ impl FileGrouper {
             ));
         }
 
-        // If recursive, collect subdirectories BEFORE processing
-        // This prevents processing newly created group directories
-        let subdirs_to_process: Vec<PathBuf> = if self.options.recursive {
-            fs::read_dir(&path)?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
-                .filter(|e| {
-                    // Skip hidden directories
-                    e.file_name()
-                        .to_str()
-                        .map(|s| !s.starts_with('.'))
-                        .unwrap_or(false)
-                })
-                .map(|e| e.path())
-                .collect()
+        // Collect the subdirectories to visit BEFORE processing anything, so
+        // that group directories created along the way are not themselves
+        // grouped. This previously used `read_dir` and so only ever reached
+        // one level down, despite the option being called `recursive`.
+        let mut subdirs_to_process: Vec<PathBuf> = if self.options.recursive {
+            crate::walk::walk_dirs(&path, true).collect()
         } else {
             Vec::new()
         };
+        // Deepest first, then alphabetically: a stable, reproducible order.
+        subdirs_to_process.sort_by(|a, b| {
+            b.components()
+                .count()
+                .cmp(&a.components().count())
+                .then_with(|| a.cmp(b))
+        });
 
         // Process the target directory
         let stats = self.process_directory_single(&path, &path, &mut changes)?;
@@ -329,7 +333,10 @@ impl FileGrouper {
     }
 
     /// Preview what groups would be created without making changes
-    pub fn preview(&self, path: &Path) -> crate::Result<HashMap<String, Vec<String>>> {
+    pub fn preview(
+        &self,
+        path: &Path,
+    ) -> crate::Result<std::collections::BTreeMap<String, Vec<String>>> {
         if !path.is_dir() {
             return Err(anyhow::anyhow!(
                 "Path is not a directory: {}",
@@ -340,14 +347,15 @@ impl FileGrouper {
         let prefix_map = self.analyze_directory(path)?;
 
         // Filter by min_count and convert PathBuf to String
-        let result: HashMap<String, Vec<String>> = prefix_map
+        let result: std::collections::BTreeMap<String, Vec<String>> = prefix_map
             .into_iter()
             .filter(|(_, files)| files.len() >= self.options.min_count)
             .map(|(prefix, files)| {
-                let filenames: Vec<String> = files
+                let mut filenames: Vec<String> = files
                     .iter()
                     .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
                     .collect();
+                filenames.sort();
                 (prefix, filenames)
             })
             .collect();
@@ -360,23 +368,15 @@ impl FileGrouper {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    // Counter to ensure unique test directories even when tests run in parallel
-    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    fn create_test_dir(test_name: &str) -> PathBuf {
-        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let test_dir = std::env::temp_dir().join(format!(
-            "reformat_group_{}_{}_{}",
-            test_name,
-            std::process::id(),
-            counter
-        ));
-        // Clean up any existing directory first
-        let _ = fs::remove_dir_all(&test_dir);
-        fs::create_dir_all(&test_dir).unwrap();
-        test_dir
+    /// Returns an owned temporary directory. The caller must keep the
+    /// `TempDir` alive: dropping it removes the directory, so returning a
+    /// bare path here deleted the fixture before the test could use it.
+    fn create_test_dir(test_name: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("reformat-{}-", test_name))
+            .tempdir()
+            .unwrap()
     }
 
     #[test]
@@ -398,8 +398,10 @@ mod tests {
 
     #[test]
     fn test_extract_prefix_custom_separator() {
-        let mut options = GroupOptions::default();
-        options.separator = '-';
+        let options = GroupOptions {
+            separator: '-',
+            ..Default::default()
+        };
         let grouper = FileGrouper::new(options);
 
         assert_eq!(
@@ -425,7 +427,8 @@ mod tests {
 
     #[test]
     fn test_basic_grouping() {
-        let test_dir = create_test_dir("basic");
+        let _tmp = create_test_dir("basic");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files
         fs::write(test_dir.join("wbs_create.tmpl"), "content").unwrap();
@@ -433,8 +436,11 @@ mod tests {
         fs::write(test_dir.join("wbs_list.tmpl"), "content").unwrap();
         fs::write(test_dir.join("other_file.txt"), "content").unwrap();
 
-        let mut options = GroupOptions::default();
-        options.min_count = 2;
+        let options = GroupOptions {
+            min_count: 2,
+
+            ..Default::default()
+        };
 
         let grouper = FileGrouper::new(options);
         let stats = grouper.process(&test_dir).unwrap();
@@ -453,14 +459,18 @@ mod tests {
 
     #[test]
     fn test_grouping_with_strip_prefix() {
-        let test_dir = create_test_dir("strip");
+        let _tmp = create_test_dir("strip");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files
         fs::write(test_dir.join("wbs_create.tmpl"), "content").unwrap();
         fs::write(test_dir.join("wbs_delete.tmpl"), "content").unwrap();
 
-        let mut options = GroupOptions::default();
-        options.strip_prefix = true;
+        let options = GroupOptions {
+            strip_prefix: true,
+
+            ..Default::default()
+        };
 
         let grouper = FileGrouper::new(options);
         let stats = grouper.process(&test_dir).unwrap();
@@ -476,14 +486,18 @@ mod tests {
 
     #[test]
     fn test_dry_run_mode() {
-        let test_dir = create_test_dir("dryrun");
+        let _tmp = create_test_dir("dryrun");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files
         fs::write(test_dir.join("abc_create.tmpl"), "content").unwrap();
         fs::write(test_dir.join("abc_delete.tmpl"), "content").unwrap();
 
-        let mut options = GroupOptions::default();
-        options.dry_run = true;
+        let options = GroupOptions {
+            dry_run: true,
+
+            ..Default::default()
+        };
 
         let grouper = FileGrouper::new(options);
         let stats = grouper.process(&test_dir).unwrap();
@@ -501,14 +515,17 @@ mod tests {
 
     #[test]
     fn test_min_count_threshold() {
-        let test_dir = create_test_dir("mincount");
+        let _tmp = create_test_dir("mincount");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files - only 2 with same prefix
         fs::write(test_dir.join("xyz_create.tmpl"), "content").unwrap();
         fs::write(test_dir.join("xyz_delete.tmpl"), "content").unwrap();
 
-        let mut options = GroupOptions::default();
-        options.min_count = 3; // Require at least 3 files
+        let options = GroupOptions {
+            min_count: 3, // Require at least 3 files
+            ..Default::default()
+        };
 
         let grouper = FileGrouper::new(options);
         let stats = grouper.process(&test_dir).unwrap();
@@ -522,7 +539,8 @@ mod tests {
 
     #[test]
     fn test_multiple_prefixes() {
-        let test_dir = create_test_dir("multiple");
+        let _tmp = create_test_dir("multiple");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files with different prefixes
         fs::write(test_dir.join("aaa_create.tmpl"), "content").unwrap();
@@ -543,7 +561,8 @@ mod tests {
 
     #[test]
     fn test_preview() {
-        let test_dir = create_test_dir("preview");
+        let _tmp = create_test_dir("preview");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files
         fs::write(test_dir.join("pre_create.tmpl"), "content").unwrap();
@@ -562,7 +581,8 @@ mod tests {
 
     #[test]
     fn test_skip_hidden_files() {
-        let test_dir = create_test_dir("hidden");
+        let _tmp = create_test_dir("hidden");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files including hidden ones
         fs::write(test_dir.join("hid_create.tmpl"), "content").unwrap();
@@ -581,7 +601,8 @@ mod tests {
 
     #[test]
     fn test_from_suffix_basic() {
-        let test_dir = create_test_dir("from_suffix");
+        let _tmp = create_test_dir("from_suffix");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files with multi-part prefix
         fs::write(test_dir.join("activity_relationships_list.tmpl"), "content").unwrap();
@@ -596,8 +617,11 @@ mod tests {
         )
         .unwrap();
 
-        let mut options = GroupOptions::default();
-        options.from_suffix = true;
+        let mut options = GroupOptions {
+            from_suffix: true,
+
+            ..Default::default()
+        };
         // from_suffix implies strip_prefix for proper behavior
         options.strip_prefix = true;
 
@@ -630,7 +654,8 @@ mod tests {
 
     #[test]
     fn test_from_suffix_mixed_prefixes() {
-        let test_dir = create_test_dir("from_suffix_mixed");
+        let _tmp = create_test_dir("from_suffix_mixed");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files with different multi-part prefixes
         fs::write(test_dir.join("user_profile_edit.tmpl"), "content").unwrap();
@@ -638,9 +663,13 @@ mod tests {
         fs::write(test_dir.join("project_settings_edit.tmpl"), "content").unwrap();
         fs::write(test_dir.join("project_settings_view.tmpl"), "content").unwrap();
 
-        let mut options = GroupOptions::default();
-        options.from_suffix = true;
-        options.strip_prefix = true;
+        let options = GroupOptions {
+            from_suffix: true,
+
+            strip_prefix: true,
+
+            ..Default::default()
+        };
 
         let grouper = FileGrouper::new(options);
         let stats = grouper.process(&test_dir).unwrap();
@@ -664,15 +693,18 @@ mod tests {
     #[test]
     fn test_from_suffix_vs_default() {
         // Test that from_suffix produces different results than default
-        let test_dir = create_test_dir("suffix_vs_default");
+        let _tmp = create_test_dir("suffix_vs_default");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create test files
         fs::write(test_dir.join("a_b_c.txt"), "content").unwrap();
         fs::write(test_dir.join("a_b_d.txt"), "content").unwrap();
 
         // With default behavior (split at first separator)
-        let mut options = GroupOptions::default();
-        options.strip_prefix = true;
+        let options = GroupOptions {
+            strip_prefix: true,
+            ..Default::default()
+        };
 
         let grouper = FileGrouper::new(options);
         let stats = grouper.process(&test_dir).unwrap();
@@ -686,13 +718,18 @@ mod tests {
         let _ = fs::remove_dir_all(&test_dir);
 
         // Now with from_suffix (split at last separator)
-        let test_dir2 = create_test_dir("suffix_vs_default2");
+        let _tmp = create_test_dir("suffix_vs_default2");
+        let test_dir2 = _tmp.path().to_path_buf();
         fs::write(test_dir2.join("a_b_c.txt"), "content").unwrap();
         fs::write(test_dir2.join("a_b_d.txt"), "content").unwrap();
 
-        let mut options2 = GroupOptions::default();
-        options2.from_suffix = true;
-        options2.strip_prefix = true;
+        let options2 = GroupOptions {
+            from_suffix: true,
+
+            strip_prefix: true,
+
+            ..Default::default()
+        };
 
         let grouper2 = FileGrouper::new(options2);
         let stats2 = grouper2.process(&test_dir2).unwrap();
@@ -708,8 +745,10 @@ mod tests {
 
     #[test]
     fn test_extract_prefix_from_suffix() {
-        let mut options = GroupOptions::default();
-        options.from_suffix = true;
+        let options = GroupOptions {
+            from_suffix: true,
+            ..Default::default()
+        };
         let grouper = FileGrouper::new(options);
 
         // With from_suffix, should return everything before the LAST separator
@@ -728,7 +767,8 @@ mod tests {
 
     #[test]
     fn test_existing_directory() {
-        let test_dir = create_test_dir("existing");
+        let _tmp = create_test_dir("existing");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create the target directory first
         fs::create_dir(test_dir.join("exist")).unwrap();
@@ -750,7 +790,8 @@ mod tests {
 
     #[test]
     fn test_recursive_processing() {
-        let test_dir = create_test_dir("recursive");
+        let _tmp = create_test_dir("recursive");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create a subdirectory with files
         let sub_dir = test_dir.join("templates");
@@ -764,8 +805,11 @@ mod tests {
         fs::write(sub_dir.join("sub_create.tmpl"), "content").unwrap();
         fs::write(sub_dir.join("sub_delete.tmpl"), "content").unwrap();
 
-        let mut options = GroupOptions::default();
-        options.recursive = true;
+        let options = GroupOptions {
+            recursive: true,
+
+            ..Default::default()
+        };
 
         let grouper = FileGrouper::new(options);
         let stats = grouper.process(&test_dir).unwrap();

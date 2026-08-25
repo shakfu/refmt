@@ -26,9 +26,12 @@ pub mod endings;
 pub mod group;
 pub mod header;
 pub mod indent;
+pub mod lines;
 pub mod refs;
 pub mod rename;
 pub mod replace;
+pub mod text;
+pub mod walk;
 pub mod whitespace;
 
 // Re-export commonly used types
@@ -45,7 +48,9 @@ pub use indent::{IndentNormalizer, IndentOptions, IndentStyle};
 pub use refs::{
     ApplyResult, FixRecord, ReferenceFix, ReferenceFixer, ReferenceScanner, ScanOptions,
 };
-pub use rename::{CaseTransform, FileRenamer, RenameOptions, SpaceReplace, TimestampFormat};
+pub use rename::{
+    CaseTransform, FileRenamer, RenameOptions, RenameStats, SpaceReplace, TimestampFormat,
+};
 pub use replace::{ContentReplacer, ReplaceOptions, ReplacePattern, ReplacePatternConfig};
 pub use whitespace::{WhitespaceCleaner, WhitespaceOptions};
 

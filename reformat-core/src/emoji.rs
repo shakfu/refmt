@@ -6,7 +6,35 @@
 use regex::Regex;
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
+
+/// Code points replaced with a text equivalent rather than deleted.
+const TASK_EMOJI_CHARS: &str = concat!(
+    r"\x{2705}\x{2611}\x{2714}\x{2713}\x{2610}\x{2612}\x{274C}\x{274E}",
+    r"\x{26A0}\x{26D4}\x{2B50}",
+    r"\x{1F7E0}\x{1F7E1}\x{1F7E8}\x{1F7E2}\x{1F534}",
+    r"\x{1F4DD}\x{1F4CB}\x{1F4C4}\x{1F4C5}\x{1F4C6}\x{1F5D3}",
+    r"\x{1F4D1}\x{1F4CC}\x{1F4CD}\x{1F4CE}",
+);
+
+/// Base emoji code points.
+///
+/// Card suits (U+2660-U+2667) and musical notes (U+2669-U+266F) are
+/// deliberately excluded. They sit inside the Miscellaneous Symbols block but
+/// are ordinary text characters, and the old blanket U+2600-U+26FF range
+/// deleted them silently: `cards <U+2660> <U+2665> end` became `cards   end`.
+const EMOJI_BASE: &str = concat!(
+    r"[\x{1F300}-\x{1F5FF}\x{1F600}-\x{1F64F}\x{1F680}-\x{1F6FF}",
+    r"\x{1F900}-\x{1F9FF}\x{1FA00}-\x{1FAFF}",
+    r"\x{1F004}\x{1F0CF}\x{1F18E}\x{1F191}-\x{1F19A}\x{1F1E0}-\x{1F1FF}",
+    r"\x{2600}-\x{265F}\x{2668}\x{2670}-\x{26FF}\x{2700}-\x{27BF}]",
+);
+
+/// Variation selectors, which choose text or emoji presentation.
+const VARIATION_SELECTORS: &str = r"[\x{FE00}-\x{FE0F}]";
+
+/// Modifiers that attach to a base emoji: presentation selectors and skin
+/// tones. Never meaningful on their own.
+const EMOJI_MODIFIERS: &str = r"[\x{FE00}-\x{FE0F}\x{1F3FB}-\x{1F3FF}]";
 
 /// Options for emoji transformation
 #[derive(Debug, Clone)]
@@ -51,60 +79,32 @@ pub struct EmojiTransformer {
 impl EmojiTransformer {
     /// Creates a new emoji transformer with the given options
     pub fn new(options: EmojiOptions) -> Self {
-        // Task completion emojis that should be replaced with text
-        let task_emoji_pattern = Regex::new(
-            r"(?x)
-            [\u2705]|          # White check mark (✅)
-            [\u2611]|          # Ballot box with check (☑)
-            [\u2714]|          # Heavy check mark (✔)
-            [\u2713]|          # Check mark (✓)
-            [\u2610]|          # Ballot box (☐)
-            [\u2612]|          # Ballot box with X (☒)
-            [\u274C]|          # Cross mark (❌)
-            [\u274E]|          # Negative squared cross mark (❎)
-            [\u26A0]|          # Warning sign (⚠)
-            [\u26D4]|          # No entry (⛔)
-            [\u2B50]|          # Star (⭐)
-            [\u{1F7E0}]|       # Orange circle (🟠)
-            [\u{1F7E1}]|       # Yellow circle (🟡)
-            [\u{1F7E8}]|       # Yellow square (🟨)
-            [\u{1F7E2}]|       # Green circle (🟢)
-            [\u{1F534}]|       # Red circle (🔴)
-            [\u{1F4DD}]|       # Memo (📝)
-            [\u{1F4CB}]|       # Clipboard (📋)
-            [\u{1F4C4}]|       # Page facing up (📄)
-            [\u{1F4C5}]|       # Calendar (📅)
-            [\u{1F4C6}]|       # Tear-off calendar (📆)
-            [\u{1F5D3}]|       # Spiral calendar (🗓)
-            [\u{1F4D1}]|       # Bookmark tabs (📑)
-            [\u{1F4CC}]|       # Pushpin (📌)
-            [\u{1F4CD}]|       # Round pushpin (📍)
-            [\u{1F4CE}]        # Paperclip (📎)
-            ",
-        )
-        .unwrap();
+        // Task/status emojis, replaced with a text equivalent. A trailing
+        // variation selector is consumed with the emoji so that removing it
+        // cannot leave an invisible orphan behind.
+        let task_emoji_pattern =
+            Regex::new(&format!(r"[{}]{}?", TASK_EMOJI_CHARS, VARIATION_SELECTORS))
+                .expect("task emoji pattern is a compile-time constant");
 
-        // General emoji pattern (all emojis not covered by task emojis)
-        let general_emoji_pattern = Regex::new(
-            r"(?x)
-            [\u{1F600}-\u{1F64F}]|  # Emoticons
-            [\u{1F300}-\u{1F5FF}]|  # Symbols & pictographs
-            [\u{1F680}-\u{1F6FF}]|  # Transport & map symbols
-            [\u{1F1E0}-\u{1F1FF}]|  # Flags
-            [\u{2600}-\u{26FF}]|    # Miscellaneous symbols
-            [\u{2700}-\u{27BF}]|    # Dingbats
-            [\u{1F900}-\u{1F9FF}]|  # Supplemental symbols
-            [\u{1FA00}-\u{1FA6F}]|  # Extended-A
-            [\u{1FA70}-\u{1FAFF}]|  # Extended-B
-            [\u{FE00}-\u{FE0F}]|    # Variation selectors
-            [\u{1F004}]|            # Mahjong tile
-            [\u{1F0CF}]|            # Playing card
-            [\u{1F18E}]|            # Negative squared AB
-            [\u{1F191}-\u{1F19A}]|  # Squared CL, COOL, etc.
-            [\u{1F1E6}-\u{1F1FF}]   # Regional indicator symbols
-            ",
-        )
-        .unwrap();
+        // Decorative emoji. Matched as whole *sequences* rather than as
+        // individual code points: a family emoji is a chain of people joined
+        // by U+200D ZERO WIDTH JOINER, and removing only the people used to
+        // leave the joiners behind as invisible debris. Keycap sequences
+        // (`1` + U+FE0F + U+20E3) had the same problem.
+        let general_emoji_pattern = Regex::new(&format!(
+            concat!(
+                // Keycap sequences first, so the digit is consumed with its mark.
+                r"(?:[0-9\#\*]{vs}?\x{{20E3}})",
+                // An emoji, its modifiers, and any ZWJ-joined continuation.
+                r"|(?:{base}{mods}*(?:\x{{200D}}{base}{mods}*)*)",
+                // Joiners and keycap marks orphaned by earlier versions.
+                r"|\x{{200D}}|\x{{20E3}}",
+            ),
+            base = EMOJI_BASE,
+            mods = EMOJI_MODIFIERS,
+            vs = VARIATION_SELECTORS,
+        ))
+        .expect("general emoji pattern is a compile-time constant");
 
         EmojiTransformer {
             options,
@@ -124,32 +124,12 @@ impl EmojiTransformer {
             return false;
         }
 
-        // Skip hidden files and directories
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| s.starts_with('.'))
-                .unwrap_or(false)
-        }) {
-            return false;
-        }
-
-        // Skip build directories
-        let skip_dirs = [
-            "build",
-            "__pycache__",
-            ".git",
-            "node_modules",
-            "venv",
-            ".venv",
-            "target",
-        ];
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| skip_dirs.contains(&s))
-                .unwrap_or(false)
-        }) {
+        // Skip hidden entries and build/vendor directories (see crate::walk)
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| crate::walk::is_excluded_component(n, crate::walk::DEFAULT_SKIP_DIRS))
+        {
             return false;
         }
 
@@ -162,35 +142,40 @@ impl EmojiTransformer {
         }
     }
 
-    /// Replace task emojis with text equivalents
-    fn replace_task_emoji(&self, emoji: &str) -> &str {
-        match emoji {
-            "\u{2705}" => "[x]",       // ✅ -> [x]
-            "\u{2611}" => "[x]",       // ☑ -> [x]
-            "\u{2714}" => "[x]",       // ✔ -> [x]
-            "\u{2713}" => "[x]",       // ✓ -> [x]
-            "\u{2610}" => "[ ]",       // ☐ -> [ ]
-            "\u{2612}" => "[X]",       // ☒ -> [X]
-            "\u{274C}" => "[X]",       // ❌ -> [X]
-            "\u{274E}" => "[X]",       // ❎ -> [X]
-            "\u{26A0}" => "[!]",       // ⚠ -> [!]
-            "\u{26D4}" => "[!]",       // ⛔ -> [!]
-            "\u{2B50}" => "[+]",       // ⭐ -> [+]
-            "\u{1F7E0}" => "[orange]", // 🟠 -> [orange]
-            "\u{1F7E1}" => "[yellow]", // 🟡 -> [yellow]
-            "\u{1F7E8}" => "[yellow]", // 🟨 -> [yellow]
-            "\u{1F7E2}" => "[green]",  // 🟢 -> [green]
-            "\u{1F534}" => "[red]",    // 🔴 -> [red]
-            "\u{1F4DD}" => "[note]",   // 📝 -> [note]
-            "\u{1F4CB}" => "[list]",   // 📋 -> [list]
-            "\u{1F4C4}" => "[doc]",    // 📄 -> [doc]
-            "\u{1F4C5}" => "[cal]",    // 📅 -> [cal]
-            "\u{1F4C6}" => "[cal]",    // 📆 -> [cal]
-            "\u{1F5D3}" => "[cal]",    // 🗓 -> [cal]
-            "\u{1F4D1}" => "[tab]",    // 📑 -> [tab]
-            "\u{1F4CC}" => "[pin]",    // 📌 -> [pin]
-            "\u{1F4CD}" => "[pin]",    // 📍 -> [pin]
-            "\u{1F4CE}" => "[clip]",   // 📎 -> [clip]
+    /// Replace task emojis with text equivalents. Keyed on the base character
+    /// so that a trailing variation selector, consumed with it, does not
+    /// defeat the lookup.
+    fn replace_task_emoji(&self, matched: &str) -> &str {
+        let Some(base) = matched.chars().next() else {
+            return "";
+        };
+        match base {
+            '\u{2705}' => "[x]",       // ✅ -> [x]
+            '\u{2611}' => "[x]",       // ☑ -> [x]
+            '\u{2714}' => "[x]",       // ✔ -> [x]
+            '\u{2713}' => "[x]",       // ✓ -> [x]
+            '\u{2610}' => "[ ]",       // ☐ -> [ ]
+            '\u{2612}' => "[X]",       // ☒ -> [X]
+            '\u{274C}' => "[X]",       // ❌ -> [X]
+            '\u{274E}' => "[X]",       // ❎ -> [X]
+            '\u{26A0}' => "[!]",       // ⚠ -> [!]
+            '\u{26D4}' => "[!]",       // ⛔ -> [!]
+            '\u{2B50}' => "[+]",       // ⭐ -> [+]
+            '\u{1F7E0}' => "[orange]", // 🟠 -> [orange]
+            '\u{1F7E1}' => "[yellow]", // 🟡 -> [yellow]
+            '\u{1F7E8}' => "[yellow]", // 🟨 -> [yellow]
+            '\u{1F7E2}' => "[green]",  // 🟢 -> [green]
+            '\u{1F534}' => "[red]",    // 🔴 -> [red]
+            '\u{1F4DD}' => "[note]",   // 📝 -> [note]
+            '\u{1F4CB}' => "[list]",   // 📋 -> [list]
+            '\u{1F4C4}' => "[doc]",    // 📄 -> [doc]
+            '\u{1F4C5}' => "[cal]",    // 📅 -> [cal]
+            '\u{1F4C6}' => "[cal]",    // 📆 -> [cal]
+            '\u{1F5D3}' => "[cal]",    // 🗓 -> [cal]
+            '\u{1F4D1}' => "[tab]",    // 📑 -> [tab]
+            '\u{1F4CC}' => "[pin]",    // 📌 -> [pin]
+            '\u{1F4CD}' => "[pin]",    // 📍 -> [pin]
+            '\u{1F4CE}' => "[clip]",   // 📎 -> [clip]
             _ => "",
         }
     }
@@ -201,7 +186,10 @@ impl EmojiTransformer {
             return Ok(0);
         }
 
-        let content = fs::read_to_string(path)?;
+        let content = match crate::text::read_text(path)? {
+            Some(c) => c,
+            None => return Ok(0),
+        };
         let original_content = content.clone();
 
         let mut modified_content = content;
@@ -240,10 +228,10 @@ impl EmojiTransformer {
 
         if modified_content != original_content {
             if self.options.dry_run {
-                println!("Would transform emojis in '{}'", path.display());
+                log::info!("Would transform emojis in '{}'", path.display());
             } else {
                 fs::write(path, modified_content)?;
-                println!("Transformed emojis in '{}'", path.display());
+                log::info!("Transformed emojis in '{}'", path.display());
             }
             Ok(changes.max(1))
         } else {
@@ -263,27 +251,11 @@ impl EmojiTransformer {
                 total_changes = changes;
             }
         } else if path.is_dir() {
-            if self.options.recursive {
-                for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-                    if entry.file_type().is_file() {
-                        let changes = self.transform_file(entry.path())?;
-                        if changes > 0 {
-                            total_files += 1;
-                            total_changes += changes;
-                        }
-                    }
-                }
-            } else {
-                for entry in fs::read_dir(path)? {
-                    let entry = entry?;
-                    let entry_path = entry.path();
-                    if entry_path.is_file() {
-                        let changes = self.transform_file(&entry_path)?;
-                        if changes > 0 {
-                            total_files += 1;
-                            total_changes += changes;
-                        }
-                    }
+            for entry in crate::walk::walk_files(path, self.options.recursive) {
+                let changes = self.transform_file(entry.path())?;
+                if changes > 0 {
+                    total_files += 1;
+                    total_changes += changes;
                 }
             }
         }
@@ -295,11 +267,125 @@ impl EmojiTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Runs the transformer over `body` in a directory unique to `case`.
+    /// Tests in one binary run in parallel, so a shared fixture path lets
+    /// them clobber each other.
+    fn transform(_case: &str, body: &str) -> String {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("t.md");
+        fs::write(&file, body).unwrap();
+        EmojiTransformer::with_defaults()
+            .transform_file(&file)
+            .unwrap();
+
+        fs::read_to_string(&file).unwrap()
+    }
+
+    /// Removing the people from a ZWJ sequence used to leave the joiners
+    /// behind as invisible debris.
+    #[test]
+    fn test_zwj_sequences_leave_no_debris() {
+        // man + ZWJ + woman + ZWJ + girl
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let out = transform(
+            "zwj_sequences_leave_no_debris",
+            &format!("family {} end\n", family),
+        );
+        assert_eq!(out, "family  end\n");
+        assert!(!out.contains('\u{200D}'), "a zero width joiner survived");
+    }
+
+    /// Keycap sequences are digit + variation selector + enclosing mark.
+    #[test]
+    fn test_keycap_sequences_are_removed_whole() {
+        let out = transform(
+            "keycap_sequences_are_removed_whole",
+            "keycap 1\u{FE0F}\u{20E3} end\n",
+        );
+        assert_eq!(out, "keycap  end\n");
+        assert!(
+            !out.contains('\u{20E3}'),
+            "an enclosing keycap mark survived"
+        );
+    }
+
+    /// Skin tone modifiers must go with their base emoji.
+    #[test]
+    fn test_skin_tone_modifiers_are_consumed() {
+        let out = transform(
+            "skin_tone_modifiers_are_consumed",
+            "wave \u{1F44B}\u{1F3FD} end\n",
+        );
+        assert_eq!(out, "wave  end\n");
+    }
+
+    /// Card suits and musical notes are ordinary text, not decoration. The old
+    /// blanket U+2600-U+26FF range deleted them.
+    #[test]
+    fn test_text_symbols_are_not_deleted() {
+        let out = transform(
+            "text_symbols_are_not_deleted",
+            "cards \u{2660} \u{2665} notes \u{266A} end\n",
+        );
+        assert_eq!(
+            out, "cards \u{2660} \u{2665} notes \u{266A} end\n",
+            "text symbols in the Miscellaneous Symbols block were deleted"
+        );
+    }
+
+    /// Real emoji from the same block are still removed.
+    #[test]
+    fn test_genuine_emoji_in_symbol_block_still_removed() {
+        // U+26BD soccer ball, U+2708 airplane
+        let out = transform(
+            "genuine_emoji_in_symbol_block_still_removed",
+            "play \u{26BD} fly \u{2708} end\n",
+        );
+        assert_eq!(out, "play  fly  end\n");
+    }
+
+    /// Debris left in files by earlier versions is cleaned up on a later run.
+    #[test]
+    fn test_orphaned_joiners_are_cleaned_up() {
+        let out = transform(
+            "orphaned_joiners_are_cleaned_up",
+            "family \u{200D}\u{200D} end\n",
+        );
+        assert_eq!(out, "family  end\n");
+    }
+
+    /// A task emoji written with an explicit emoji presentation selector must
+    /// still be replaced, and must not leave the selector behind.
+    #[test]
+    fn test_task_emoji_with_variation_selector() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("vs.md");
+        fs::write(&file, "- \u{2714}\u{FE0F} done\n").unwrap();
+        EmojiTransformer::with_defaults()
+            .transform_file(&file)
+            .unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "- [x] done\n");
+    }
     use std::fs;
 
     #[test]
     fn test_replace_task_emojis() {
-        let test_dir = std::env::temp_dir().join("reformat_emoji_test");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.md");
@@ -320,13 +406,15 @@ mod tests {
         // Should still be valid markdown
         let content = fs::read_to_string(&test_file).unwrap();
         assert!(content.contains("[x]") || content.contains("[ ]"));
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_checkmark_replacement() {
-        let test_dir = std::env::temp_dir().join("reformat_emoji_checkmark");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
@@ -341,21 +429,26 @@ mod tests {
             assert!(!content.contains("✅"));
             assert!(!content.contains("☐"));
         }
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_dry_run_mode() {
-        let test_dir = std::env::temp_dir().join("reformat_emoji_dry");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
         let original = "Task ✅ done";
         fs::write(&test_file, original).unwrap();
 
-        let mut opts = EmojiOptions::default();
-        opts.dry_run = true;
+        let opts = EmojiOptions {
+            dry_run: true,
+
+            ..Default::default()
+        };
 
         let transformer = EmojiTransformer::new(opts);
         transformer.process(&test_file).unwrap();
@@ -363,13 +456,15 @@ mod tests {
         // File should be unchanged
         let content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, original);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_skip_hidden_files() {
-        let test_dir = std::env::temp_dir().join("reformat_emoji_hidden");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let hidden_file = test_dir.join(".hidden.txt");
@@ -380,13 +475,15 @@ mod tests {
 
         // Hidden file should be skipped
         assert_eq!(files, 0);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_extension_filtering() {
-        let test_dir = std::env::temp_dir().join("reformat_emoji_ext");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let md_file = test_dir.join("test.md");
@@ -395,8 +492,11 @@ mod tests {
         fs::write(&md_file, "✅ Task\n").unwrap();
         fs::write(&xyz_file, "✅ Task\n").unwrap();
 
-        let mut opts = EmojiOptions::default();
-        opts.file_extensions = vec![".md".to_string()];
+        let opts = EmojiOptions {
+            file_extensions: vec![".md".to_string()],
+
+            ..Default::default()
+        };
 
         let transformer = EmojiTransformer::new(opts);
         let (files, _) = transformer.process(&test_dir).unwrap();
@@ -409,13 +509,15 @@ mod tests {
 
         assert!(md_content.contains("[x]") || !md_content.contains("✅"));
         assert_eq!(xyz_content, "✅ Task\n"); // Unchanged
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_recursive_processing() {
-        let test_dir = std::env::temp_dir().join("reformat_emoji_recursive");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let sub_dir = test_dir.join("subdir");
@@ -431,13 +533,15 @@ mod tests {
         let (files, _) = transformer.process(&test_dir).unwrap();
 
         assert_eq!(files, 2);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_star_and_circle_replacement() {
-        let test_dir = std::env::temp_dir().join("reformat_emoji_star_circle");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.md");
@@ -473,13 +577,15 @@ mod tests {
             assert!(!content.contains("🟢"), "Green circle should be removed");
             assert!(!content.contains("🔴"), "Red circle should be removed");
         }
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 
     #[test]
     fn test_yellow_square_replacement() {
-        let test_dir = std::env::temp_dir().join("reformat_emoji_yellow_square");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.md");
@@ -503,7 +609,5 @@ mod tests {
                 "Yellow circle emoji should be removed"
             );
         }
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 }

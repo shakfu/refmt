@@ -19,8 +19,7 @@ reformat is a modular code transformation framework implemented in Rust. It prov
 
 ```text
 reformat/
-├── Cargo.toml                    # Workspace definition (v0.1.6)
-├── reformat.json                 # Example preset configuration
+├── Cargo.toml                    # Workspace definition (v0.1.7)
 ├── reformat-core/                # Core library
 │   ├── Cargo.toml
 │   └── src/
@@ -35,24 +34,29 @@ reformat/
 │       ├── group.rs              # FileGrouper implementation
 │       ├── header.rs             # HeaderManager implementation
 │       ├── indent.rs             # IndentNormalizer implementation
+│       ├── lines.rs              # Terminator-preserving line splitting
 │       ├── refs.rs               # ReferenceScanner and ReferenceFixer
 │       ├── rename.rs             # FileRenamer implementation
 │       ├── replace.rs            # ContentReplacer implementation
+│       ├── text.rs               # Safe text reading (skips binary/non-UTF-8)
+│       ├── walk.rs               # Shared traversal and exclusion rules
 │       └── whitespace.rs         # WhitespaceCleaner implementation
 │
 ├── reformat-cli/                 # CLI binary
 │   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs               # Clap-based CLI with subcommands
-│       └── config.rs             # Config file loading
+│   ├── src/
+│   │   ├── main.rs               # Clap-based CLI with subcommands
+│   │   └── config.rs             # Config file loading
+│   └── tests/
+│       ├── cli_integration.rs    # CLI functionality tests
+│       └── repo_safety.rs        # Version-control and build-dir safety
 │
 ├── reformat-plugins/             # Plugin system (foundation only)
 │   ├── Cargo.toml
 │   └── src/
 │       └── lib.rs                # Plugin API placeholder
 │
-└── tests/                        # Integration tests
-    ├── cli_integration.rs        # CLI functionality tests
+└── reformat-core/tests/
     └── library_integration.rs    # Library API tests
 ```
 
@@ -68,7 +72,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 
 [workspace.dependencies]
@@ -77,7 +81,6 @@ aho-corasick = "1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
-thiserror = "1.0"
 walkdir = "2.5"
 glob = "0.3"
 chrono = { version = "0.4", features = ["serde"] }

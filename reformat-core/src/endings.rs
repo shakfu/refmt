@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
 /// Line ending style
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,32 +89,12 @@ impl EndingsNormalizer {
             return false;
         }
 
-        // Skip hidden files
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| s.starts_with('.'))
-                .unwrap_or(false)
-        }) {
-            return false;
-        }
-
-        // Skip build directories
-        let skip_dirs = [
-            "build",
-            "__pycache__",
-            ".git",
-            "node_modules",
-            "venv",
-            ".venv",
-            "target",
-        ];
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| skip_dirs.contains(&s))
-                .unwrap_or(false)
-        }) {
+        // Skip hidden entries and build/vendor directories (see crate::walk)
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| crate::walk::is_excluded_component(n, crate::walk::DEFAULT_SKIP_DIRS))
+        {
             return false;
         }
 
@@ -180,14 +159,14 @@ impl EndingsNormalizer {
 
         if changed > 0 {
             if self.options.dry_run {
-                println!(
+                log::info!(
                     "Would normalize {} line ending(s) in '{}'",
                     changed,
                     path.display()
                 );
             } else {
                 fs::write(path, output)?;
-                println!(
+                log::info!(
                     "Normalized {} line ending(s) in '{}'",
                     changed,
                     path.display()
@@ -210,27 +189,11 @@ impl EndingsNormalizer {
                 total_endings = endings;
             }
         } else if path.is_dir() {
-            if self.options.recursive {
-                for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-                    if entry.file_type().is_file() {
-                        let endings = self.normalize_file(entry.path())?;
-                        if endings > 0 {
-                            total_files += 1;
-                            total_endings += endings;
-                        }
-                    }
-                }
-            } else {
-                for entry in fs::read_dir(path)? {
-                    let entry = entry?;
-                    let entry_path = entry.path();
-                    if entry_path.is_file() {
-                        let endings = self.normalize_file(&entry_path)?;
-                        if endings > 0 {
-                            total_files += 1;
-                            total_endings += endings;
-                        }
-                    }
+            for entry in crate::walk::walk_files(path, self.options.recursive) {
+                let endings = self.normalize_file(entry.path())?;
+                if endings > 0 {
+                    total_files += 1;
+                    total_endings += endings;
                 }
             }
         }
@@ -246,7 +209,11 @@ mod tests {
 
     #[test]
     fn test_crlf_to_lf() {
-        let dir = std::env::temp_dir().join("reformat_endings_crlf_lf");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -260,13 +227,15 @@ mod tests {
 
         let content = fs::read(&file).unwrap();
         assert_eq!(content, b"line1\nline2\nline3\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_lf_to_crlf() {
-        let dir = std::env::temp_dir().join("reformat_endings_lf_crlf");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -284,13 +253,15 @@ mod tests {
 
         let content = fs::read(&file).unwrap();
         assert_eq!(content, b"line1\r\nline2\r\nline3\r\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_cr_to_lf() {
-        let dir = std::env::temp_dir().join("reformat_endings_cr_lf");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -304,13 +275,15 @@ mod tests {
 
         let content = fs::read(&file).unwrap();
         assert_eq!(content, b"line1\nline2\nline3\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_mixed_endings() {
-        let dir = std::env::temp_dir().join("reformat_endings_mixed");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -324,13 +297,15 @@ mod tests {
 
         let content = fs::read(&file).unwrap();
         assert_eq!(content, b"line1\nline2\nline3\nline4\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_already_normalized() {
-        let dir = std::env::temp_dir().join("reformat_endings_noop");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -341,13 +316,15 @@ mod tests {
 
         assert_eq!(files, 0);
         assert_eq!(endings, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_dry_run() {
-        let dir = std::env::temp_dir().join("reformat_endings_dry");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -366,13 +343,15 @@ mod tests {
         // File should be unchanged
         let content = fs::read(&file).unwrap();
         assert_eq!(content, original);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_skip_binary_files() {
-        let dir = std::env::temp_dir().join("reformat_endings_binary");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -384,13 +363,15 @@ mod tests {
         let (files, _) = normalizer.process(&file).unwrap();
 
         assert_eq!(files, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_skip_hidden_files() {
-        let dir = std::env::temp_dir().join("reformat_endings_hidden");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join(".hidden.txt");
@@ -400,13 +381,15 @@ mod tests {
         let (files, _) = normalizer.process(&file).unwrap();
 
         assert_eq!(files, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_recursive_processing() {
-        let dir = std::env::temp_dir().join("reformat_endings_recursive");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let sub = dir.join("sub");
@@ -422,8 +405,6 @@ mod tests {
 
         assert_eq!(files, 2);
         assert_eq!(endings, 2);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

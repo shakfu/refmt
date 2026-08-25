@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
 /// Indentation style
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,30 +82,12 @@ impl IndentNormalizer {
             return false;
         }
 
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| s.starts_with('.'))
-                .unwrap_or(false)
-        }) {
-            return false;
-        }
-
-        let skip_dirs = [
-            "build",
-            "__pycache__",
-            ".git",
-            "node_modules",
-            "venv",
-            ".venv",
-            "target",
-        ];
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| skip_dirs.contains(&s))
-                .unwrap_or(false)
-        }) {
+        // Skip hidden entries and build/vendor directories (see crate::walk)
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| crate::walk::is_excluded_component(n, crate::walk::DEFAULT_SKIP_DIRS))
+        {
             return false;
         }
 
@@ -178,35 +159,35 @@ impl IndentNormalizer {
             return Ok(0);
         }
 
-        let content = fs::read_to_string(path)?;
-        let ends_with_newline = content.ends_with('\n');
-        let lines: Vec<&str> = content.lines().collect();
-
+        let content = match crate::text::read_text(path)? {
+            Some(c) => c,
+            None => return Ok(0),
+        };
+        let mut output = String::with_capacity(content.len());
         let mut changed_count = 0;
-        let mut new_lines: Vec<String> = Vec::with_capacity(lines.len());
 
-        for line in &lines {
-            let (converted, changed) = self.convert_line(line);
+        // Only leading whitespace is rewritten; each line's original
+        // terminator is written back untouched so that normalising
+        // indentation does not also normalise line endings.
+        for (body, terminator) in crate::lines::split_lines(&content) {
+            let (converted, changed) = self.convert_line(body);
             if changed {
                 changed_count += 1;
             }
-            new_lines.push(converted);
+            output.push_str(&converted);
+            output.push_str(terminator);
         }
 
         if changed_count > 0 {
             if self.options.dry_run {
-                println!(
+                log::info!(
                     "Would normalize {} line(s) of indentation in '{}'",
                     changed_count,
                     path.display()
                 );
             } else {
-                let mut output = new_lines.join("\n");
-                if ends_with_newline {
-                    output.push('\n');
-                }
                 fs::write(path, output)?;
-                println!(
+                log::info!(
                     "Normalized {} line(s) of indentation in '{}'",
                     changed_count,
                     path.display()
@@ -229,27 +210,11 @@ impl IndentNormalizer {
                 total_lines = lines;
             }
         } else if path.is_dir() {
-            if self.options.recursive {
-                for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-                    if entry.file_type().is_file() {
-                        let lines = self.normalize_file(entry.path())?;
-                        if lines > 0 {
-                            total_files += 1;
-                            total_lines += lines;
-                        }
-                    }
-                }
-            } else {
-                for entry in fs::read_dir(path)? {
-                    let entry = entry?;
-                    let entry_path = entry.path();
-                    if entry_path.is_file() {
-                        let lines = self.normalize_file(&entry_path)?;
-                        if lines > 0 {
-                            total_files += 1;
-                            total_lines += lines;
-                        }
-                    }
+            for entry in crate::walk::walk_files(path, self.options.recursive) {
+                let lines = self.normalize_file(entry.path())?;
+                if lines > 0 {
+                    total_files += 1;
+                    total_lines += lines;
                 }
             }
         }
@@ -265,7 +230,11 @@ mod tests {
 
     #[test]
     fn test_tabs_to_spaces() {
-        let dir = std::env::temp_dir().join("reformat_indent_t2s");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -279,13 +248,15 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "    line1\n        line2\nline3\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_spaces_to_tabs() {
-        let dir = std::env::temp_dir().join("reformat_indent_s2t");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -304,13 +275,15 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "\tline1\n\t\tline2\nline3\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_width_2_spaces() {
-        let dir = std::env::temp_dir().join("reformat_indent_w2");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -326,13 +299,15 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "  line1\n    line2\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_partial_tab_stop_spaces_to_tabs() {
-        let dir = std::env::temp_dir().join("reformat_indent_partial");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -349,13 +324,15 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "\t  line1\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_already_normalized() {
-        let dir = std::env::temp_dir().join("reformat_indent_noop");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -366,13 +343,15 @@ mod tests {
 
         assert_eq!(files, 0);
         assert_eq!(lines, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_dry_run() {
-        let dir = std::env::temp_dir().join("reformat_indent_dry");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -389,13 +368,15 @@ mod tests {
         assert_eq!(lines, 1);
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, original);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_preserves_trailing_newline() {
-        let dir = std::env::temp_dir().join("reformat_indent_newline");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -407,13 +388,15 @@ mod tests {
         let content = fs::read_to_string(&file).unwrap();
         assert!(content.ends_with('\n'));
         assert_eq!(content, "    line1\n    line2\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_mixed_indent() {
-        let dir = std::env::temp_dir().join("reformat_indent_mixed");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -426,8 +409,51 @@ mod tests {
         let content = fs::read_to_string(&file).unwrap();
         // Tab (=4 col) + 2 spaces = 6 spaces
         assert_eq!(content, "      line1\n");
+    }
 
-        fs::remove_dir_all(&dir).unwrap();
+    /// Indentation conversion must not rewrite line terminators.
+    #[test]
+    fn test_indent_preserves_line_endings() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        let cases = [
+            (
+                "crlf",
+                "\tif x:\r\n\t\tpass\r\n",
+                "    if x:\r\n        pass\r\n",
+            ),
+            ("cr", "\tif x:\r\t\tpass\r", "    if x:\r        pass\r"),
+            (
+                "mixed",
+                "\tif x:\r\n\t\tpass\n",
+                "    if x:\r\n        pass\n",
+            ),
+            ("no_final_newline", "\tif x:", "    if x:"),
+        ];
+
+        for (name, input, expected) in cases {
+            let file = dir.join(format!("{}.py", name));
+            fs::write(&file, input).unwrap();
+
+            let normalizer = IndentNormalizer::new(IndentOptions {
+                style: IndentStyle::Spaces,
+                width: 4,
+                ..Default::default()
+            });
+            normalizer.process(&file).unwrap();
+
+            assert_eq!(
+                fs::read_to_string(&file).unwrap(),
+                expected,
+                "case '{}': line endings were not preserved",
+                name
+            );
+        }
     }
 
     #[test]
@@ -441,7 +467,11 @@ mod tests {
 
     #[test]
     fn test_recursive_processing() {
-        let dir = std::env::temp_dir().join("reformat_indent_recursive");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let sub = dir.join("sub");
@@ -457,7 +487,5 @@ mod tests {
 
         assert_eq!(files, 2);
         assert_eq!(lines, 2);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

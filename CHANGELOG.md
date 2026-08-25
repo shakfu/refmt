@@ -5,6 +5,281 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-08-26
+
+### Fixed
+
+**Transformers no longer traverse into `.git`, or into build and vendor directories**
+
+- `FileRenamer` checked only the final path component for a leading dot, so
+  `WalkDir` descended into `.git/` and renamed `HEAD`, `config`, `index` and
+  loose objects, destroying the repository. `reformat rename_files` and the
+  default `reformat -r <path>` command were both affected. Renames are not
+  journalled, so there was no way to undo it.
+- `CaseConverter` had no exclusion logic at all and rewrote identifiers inside
+  `node_modules/`, `target/` and other vendored trees.
+- Exclusion is now shared: `reformat_core::walk` provides `is_excluded`,
+  `is_excluded_component`, `include_entry`, `walk_files` and
+  `walk_files_and_symlinks`, and all nine transformers use them. Excluded
+  subtrees are pruned with `WalkDir::filter_entry` before being descended into,
+  rather than walked and then filtered file by file.
+
+**`reformat <command> .` is no longer a silent no-op**
+
+- The exclusion check scanned every path component including `.`, which reads
+  as a hidden directory name. `reformat clean .` -- the most natural way to
+  invoke the tool -- therefore matched nothing and reported "No files needed
+  cleaning" while leaving every file untouched. Only `Component::Normal`
+  components are now considered, so `.` and `..` are treated as navigation.
+  Affected `clean`, `emojis`, `endings`, `indent`, `replace` and `header`.
+- The same defect pruned the walk root during reference scanning, so
+  `group --scope .` scanned zero files. The walk root is now always accepted;
+  explicitly named hidden files are still skipped by the per-file check.
+
+**Trailing-whitespace and indentation cleanup no longer rewrite line endings**
+
+- `clean` and `indent` split with `str::lines()` and rejoined with a literal
+  `"\n"`, so any CRLF file they touched was silently converted to LF. The
+  conversion was conditional on the file needing a change at all, so within one
+  run some files were converted and others were not. `README.md` documented the
+  opposite behaviour ("while preserving line endings").
+- Both now split with `reformat_core::lines::split_lines`, which yields
+  `(body, terminator)` pairs and recognises LF, CRLF and lone CR. Only the body
+  is modified; the original terminator is written back. Lone-CR files, which the
+  old code also mangled, are handled correctly now too.
+
+**`header --update-year` updates the existing header instead of duplicating it**
+
+- The year-flexibility regex was `(?:19|20)\d\{2\}`. The escaped braces made
+  `\{2\}` a literal `{2}` rather than a repetition quantifier, so the
+  substitution never fired, no year-variant header was ever recognised, and the
+  update branch was unreachable. Running `--update-year` in a new year inserted
+  a second header above the first; run annually, headers accumulated.
+  `CHANGELOG.md` for 0.1.6 claimed this feature worked.
+- Header detection is now anchored to the header zone -- the top of the file,
+  after any shebang and leading blank lines -- so a year-variant string
+  elsewhere in the body (a test fixture, a vendored blob) is no longer mistaken
+  for the file's own header and rewritten in place. Previously detection
+  searched the entire file.
+
+**Reference fixing rewrites only the recorded occurrences**
+
+- `ReferenceFixer::apply_fixes_to_file` performed a global
+  `String::replace(old, new)` across the whole file, discarding the line and
+  column the scanner had carefully recorded. Combined with substring matching,
+  a move of `user_list.tmpl` also rewrote every mention of
+  `super_user_list.tmpl` and `user_list.tmpl.bak` -- different files entirely.
+  Fixes are now applied by byte offset, back to front, so only the recorded
+  occurrences change.
+- Matching now requires the reference to stand alone: a match flanked by a
+  filename character (alphanumeric, `_`, `-`, `.`) is part of a longer name
+  and is not reported. A leading `/` is still accepted, so a path-qualified
+  reference such as `tmpl/user_list.tmpl` is correctly rewritten to
+  `tmpl/user/list.tmpl`.
+- Applying a record is now idempotent and stale-safe. Each edit verifies that
+  the text at the recorded position is still the recorded `old_reference`
+  before touching it; anything else is skipped and counted. Previously a
+  second run compounded the replacement, turning `x/a.txt` into `x/x/a.txt`,
+  because the move re-introduced `a.txt` as a substring.
+- `references_fixed` now counts occurrences actually rewritten rather than
+  fixes attempted, and `files_modified` counts only files that were written --
+  it previously incremented for every file processed, including those where
+  nothing matched.
+- Deduplication no longer discards distinct occurrences. Two references on the
+  same line at different columns are separate edits; deduplicating on
+  `(file, line, old_reference)` kept only the first, so the rest were never
+  fixed.
+- `ReferenceFix` gained an optional `offset` field carrying the authoritative
+  byte position. Records written by earlier versions omit it and fall back to
+  line and column, so an existing `fixes.json` still applies.
+- `ApplyResult` gained `references_skipped`, reported by the CLI, so a stale or
+  already-applied record is visible rather than silently doing nothing.
+
+**Emoji removal no longer leaves debris or deletes ordinary text**
+
+- Emoji are matched as whole sequences rather than as individual code points.
+  Removing the people from a ZWJ sequence (a family emoji) used to leave the
+  U+200D joiners behind as invisible debris, and keycaps (`1` + U+FE0F +
+  U+20E3) lost their digit but kept the enclosing mark. Skin tone modifiers
+  and variation selectors are consumed with their base emoji. Joiners and
+  keycap marks orphaned by earlier versions are cleaned up on the next run.
+- Card suits (U+2660-U+2667) and musical notes (U+2669-U+266F) are excluded.
+  They sit in the Miscellaneous Symbols block, which was matched wholesale, so
+  `cards <U+2660> <U+2665> end` became `cards   end`. Genuine emoji from the
+  same block are still removed.
+- A task emoji written with an explicit presentation selector is replaced
+  without leaving the selector behind.
+
+**Acronyms survive case conversion**
+
+- Word splitting broke on every capital, so `parseHTTPResponse` converted to
+  `parse_h_t_t_p_response`. A run of capitals is now one word, ending one
+  character early when the last capital begins the next word.
+- The candidate patterns admit runs of capitals, so `XMLHttpRequest` is a
+  conversion candidate at all. A single capitalised word still is not, so
+  ordinary prose in `.md` files is left alone.
+
+**`convert`'s prefix and suffix options actually work**
+
+- `--strip-prefix m_`, documented with exactly that example, silently did
+  nothing: the candidate pattern could not match `m_userName`, and `userName`
+  within it has no word boundary before it since `_` is a word character. The
+  pattern now admits any configured affix as an optional part of the match.
+  This affected the subcommand and the preset path alike.
+
+**`group --recursive` is recursive**
+
+- It collected only the immediate subdirectories of the target, so nothing
+  more than one level down was ever grouped, despite the flag's description.
+- Group output is deterministic. Directories were iterated straight out of a
+  `HashMap`, so the directories created, the lines logged and the contents of
+  `changes.json` all varied between runs on identical input. `preview` returns
+  a `BTreeMap` for the same reason.
+
+**Dry runs leave nothing behind**
+
+- `group --dry-run` wrote `changes.json` describing moves that had not
+  happened. Feeding that record to the reference fixer would rewrite
+  references to files still sitting where they were.
+- `--changes-file` and `--fixes-file` set where those records are written;
+  replacing an existing file is announced rather than silent.
+
+**Errors are reported once, and missing paths fail**
+
+- A failure was printed three times: by the command, by `main`, and by
+  anyhow's own handler. Only anyhow's remains.
+- Every command now exits non-zero for a path that does not exist. `reformat
+  clean /nonexistent` used to print "No files needed cleaning" and exit 0,
+  making a typo in a CI script indistinguishable from success.
+
+**Robustness**
+
+- A non-UTF-8 or binary file carrying a processed extension is skipped with a
+  warning. Transformers read with `fs::read_to_string(path)?` and propagated
+  the error, so one such file aborted the whole directory walk partway,
+  leaving the tree half-processed.
+- A rename collision no longer aborts the run. `FileRenamer::process_with_stats`
+  reports what was renamed, what was skipped, and why; one collision in a large
+  tree used to abandon it half-renamed with no record of what had moved.
+- `ReferenceScanner::new` returns `Result` instead of panicking on a
+  pathological pattern set.
+- Reference scan patterns are sorted, so scan results are reproducible.
+
+**Configuration is parsed strictly**
+
+- An unrecognised `case_transform`, `space_replace`, `timestamp`, `style` or
+  `separator` value is now an error naming the valid alternatives. Unknown
+  values fell through to a no-op variant, so a typo such as `"lowercse"`
+  silently disabled the step it configured.
+- Unknown keys are rejected and named. A misspelled key was dropped in
+  silence, leaving the user believing they had configured something.
+
+**`--quiet` works, and output is no longer garbled**
+
+- Transformers reported what they touched with `println!` straight from the
+  library, where no CLI flag could reach them. They now log at `info`, which is
+  the default level, so ordinary runs look the same and `--quiet` silences
+  them. Library consumers control this through the `log` facade.
+- Progress spinners are gone. They wrote to the same stream as the per-file
+  reporting and overwrote it, and showed no actual progress. The per-file lines
+  already convey that work is happening.
+- The per-file "No changes needed" line, previously printed for every
+  unmodified file on a real run but not on a dry run, is now a debug message.
+
+**Hidden directories the user named explicitly are no longer skipped**
+
+- Exclusion checked every component of a path, so anything under a hidden
+  ancestor was silently skipped: `reformat clean ~/.config/nvim` did nothing,
+  and so did any run inside a `.tmp`-prefixed scratch directory. Pruning now
+  happens during the walk, and the walk root is honoured even when hidden.
+  Metadata and build directories are still refused as a root, so pointing the
+  renamer at `.git` cannot destroy a repository.
+
+**Presets are found from a subdirectory**
+
+- `reformat.json` was only ever read from the current directory, so running
+  from anywhere below the project root found nothing -- despite the
+  documentation describing the file as living at the project root. The current
+  directory and then each ancestor are searched.
+
+### Changed
+
+- Dependency hygiene: `rayon` and the `parallel` feature it gated are gone. The
+  feature was on by default and requested explicitly by the CLI, but nothing in
+  the codebase ever used rayon, so it advertised a capability that did not
+  exist. `thiserror` (declared in two crates, used in neither), `indicatif`
+  (unused since the spinners were removed), and `reformat-plugins`' three
+  unused dependencies are also removed, along with the CLI's dependency on
+  `reformat-plugins`, which it never called into.
+- Internal crate versions are declared once in `[workspace.dependencies]`. The
+  CLI pinned `reformat-core` and `reformat-plugins` at `0.1.4` while the
+  workspace was at `0.1.6`.
+- `rust-version = "1.82"` is declared, and CI checks it.
+- CI now runs tests on Linux, macOS and Windows, checks the MSRV, builds in
+  release mode, and runs clippy with `--all-targets`. The lint gate previously
+  covered library code only, leaving 51 warnings in test code unseen.
+- `make install` uses `install(1)` and honours `PREFIX`; there is an
+  `uninstall` target. It previously copied to `/usr/local/bin` without `sudo`
+  and reported success regardless of the outcome.
+- Tests use `tempfile::TempDir` rather than 160 hardcoded paths under the
+  system temp directory. Fixtures are now unique per test and are removed even
+  when a test panics; the old shared paths let parallel tests clobber each
+  other, which they did.
+- CLI coverage added for `group`, `endings`, `indent` and `header`, four of the
+  nine subcommands -- including the most destructive one, which had none.
+
+### Documentation
+
+- Corrected the claims that all transformers skip build directories, that
+  `clean` preserves line endings, that `--update-year` updates headers in
+  place, that the default command is a single pass, that `-q` suppresses
+  output, and that presets are read from the project root. Each is now true of
+  the code rather than of the intention.
+- Added a "Before you run it" section: transformations are in place and
+  irreversible, `--dry-run` exists, start from a clean working tree.
+- Added a "Caveats" section: `convert` and `replace` match text, not syntax,
+  and will rewrite matches inside comments and string literals.
+- `docs/ARCHITECTURE.md` describes the actual tree: no `reformat.json` at the
+  repository root, tests under each crate, and the `walk`, `lines` and `text`
+  modules.
+
+
+
+**Option assembly is single-sourced**
+
+- Each step's `*Config` is now the one place options are built, via
+  `to_options()` (and `ConvertConfig::to_converter()`) in `reformat-core`. The
+  subcommands and the preset/job runner both construct a config and hand it to
+  the same code, where previously each assembled options separately and the
+  two had drifted: the preset `convert` step hardcoded `None` for every
+  strip/replace affix setting, leaving half of `ConvertConfig` unreachable from
+  a preset. Steps now return a `StepOutcome` and callers format it, so a
+  standalone command and a pipeline step keep their own wording. `main.rs`
+  lost around 300 lines.
+- `RenameConfig` and `ConvertConfig` gained the fields needed to express
+  everything their subcommands can.
+- File timestamps use `chrono` rather than hand-rolled calendar arithmetic, and
+  are local rather than UTC.
+
+**Lint gate restored**
+
+- `reformat-core/src/rename.rs` failed `cargo clippy -- -D warnings`, so the
+  CI `clippy` job was red on `main`. Fixed by using `sort_by_key`.
+
+- The skip list is now uniform across every transformer and additionally covers
+  `dist/` and `vendor/`, which previously only the reference scanner excluded.
+- Non-recursive directory processing walks with `max_depth(1)` instead of
+  `fs::read_dir`, so an unreadable entry is skipped rather than aborting the run.
+
+### Added
+
+- `tempfile` dev-dependency and `reformat-cli/tests/repo_safety.rs`, which
+  asserts that every transformer leaves version-control metadata intact, that
+  build directories are skipped, and that relative `.` paths are processed.
+- `reformat_core::lines`, a line splitter that keeps each line's terminator
+  separate from its body, for transformers that edit content but must not
+  change how lines are separated.
+
 ## [0.1.6]
 
 ### Added
@@ -111,7 +386,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added 8 new CLI integration tests for `--job` (file, stdin, multi-step, dry-run, missing file, invalid JSON, unknown step, conflicts with preset)
 - All 201 tests passing
 
-## [0.1.5]
+## [0.1.5] - 2026-03-29
 
 ### Added
 

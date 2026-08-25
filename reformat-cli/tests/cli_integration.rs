@@ -37,14 +37,18 @@ fn test_cli_help() {
 
 #[test]
 fn test_cli_basic_conversion() {
-    let test_dir = std::env::temp_dir().join("reformat_test_cli_basic");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
     fs::write(&test_file, "myVariable = 'test'").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["convert", "--from-camel", "--to-snake"])
+        .args(["convert", "--from-camel", "--to-snake"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat");
@@ -53,13 +57,15 @@ fn test_cli_basic_conversion() {
 
     let content = fs::read_to_string(&test_file).unwrap();
     assert!(content.contains("my_variable"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_dry_run() {
-    let test_dir = std::env::temp_dir().join("reformat_test_cli_dry");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
@@ -67,7 +73,7 @@ fn test_cli_dry_run() {
     fs::write(&test_file, original).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["convert", "--from-camel", "--to-snake", "--dry-run"])
+        .args(["convert", "--from-camel", "--to-snake", "--dry-run"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat");
@@ -81,13 +87,15 @@ fn test_cli_dry_run() {
     // Output should indicate what would be converted
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Would convert"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_recursive() {
-    let test_dir = std::env::temp_dir().join("reformat_test_cli_recursive");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let sub_dir = test_dir.join("subdir");
@@ -100,7 +108,7 @@ fn test_cli_recursive() {
     fs::write(&file2, "nestedVar = 2").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["convert", "--from-camel", "--to-snake", "-r"])
+        .args(["convert", "--from-camel", "--to-snake", "-r"])
         .arg(&test_dir)
         .output()
         .expect("Failed to execute reformat");
@@ -112,20 +120,22 @@ fn test_cli_recursive() {
 
     assert!(content1.contains("top_level"));
     assert!(content2.contains("nested_var"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_with_prefix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_cli_prefix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
     fs::write(&test_file, "myVariable = 'test'").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["convert", "--from-camel", "--to-snake", "--prefix", "old_"])
+        .args(["convert", "--from-camel", "--to-snake", "--prefix", "old_"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat");
@@ -134,20 +144,22 @@ fn test_cli_with_prefix() {
 
     let content = fs::read_to_string(&test_file).unwrap();
     assert!(content.contains("old_my_variable"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_with_suffix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_cli_suffix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
     fs::write(&test_file, "myVariable = 'test'").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["convert", "--from-camel", "--to-snake", "--suffix", "_new"])
+        .args(["convert", "--from-camel", "--to-snake", "--suffix", "_new"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat");
@@ -156,20 +168,22 @@ fn test_cli_with_suffix() {
 
     let content = fs::read_to_string(&test_file).unwrap();
     assert!(content.contains("my_variable_new"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_word_filter() {
-    let test_dir = std::env::temp_dir().join("reformat_test_cli_filter");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
     fs::write(&test_file, "getUserName = 'alice'\nmyVariable = 123").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&[
+        .args([
             "convert",
             "--from-camel",
             "--to-snake",
@@ -185,13 +199,15 @@ fn test_cli_word_filter() {
     let content = fs::read_to_string(&test_file).unwrap();
     assert!(content.contains("get_user_name"));
     assert!(content.contains("myVariable")); // Should not be converted
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_multiple_extensions() {
-    let test_dir = std::env::temp_dir().join("reformat_test_cli_exts");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let py_file = test_dir.join("test.py");
@@ -203,7 +219,7 @@ fn test_cli_multiple_extensions() {
     fs::write(&txt_file, "myVariable = 3").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&[
+        .args([
             "convert",
             "--from-camel",
             "--to-snake",
@@ -225,14 +241,12 @@ fn test_cli_multiple_extensions() {
     assert!(py_content.contains("my_variable"));
     assert!(js_content.contains("my_variable"));
     assert!(txt_content.contains("myVariable")); // Should not be converted
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_error_missing_from() {
     let output = Command::new(get_binary_path())
-        .args(&["convert", "--to-snake", "dummy.py"])
+        .args(["convert", "--to-snake", "dummy.py"])
         .output()
         .expect("Failed to execute reformat");
 
@@ -244,7 +258,7 @@ fn test_cli_error_missing_from() {
 #[test]
 fn test_cli_error_missing_to() {
     let output = Command::new(get_binary_path())
-        .args(&["convert", "--from-camel", "dummy.py"])
+        .args(["convert", "--from-camel", "dummy.py"])
         .output()
         .expect("Failed to execute reformat");
 
@@ -256,7 +270,7 @@ fn test_cli_error_missing_to() {
 #[test]
 fn test_cli_error_conflicting_from() {
     let output = Command::new(get_binary_path())
-        .args(&[
+        .args([
             "convert",
             "--from-camel",
             "--from-snake",
@@ -273,7 +287,7 @@ fn test_cli_error_conflicting_from() {
 
 #[test]
 fn test_cli_all_format_combinations() {
-    let test_cases = vec![
+    let test_cases = [
         ("--from-camel", "--to-pascal", "myName", "MyName"),
         ("--from-pascal", "--to-snake", "MyName", "my_name"),
         ("--from-snake", "--to-kebab", "my_name", "my-name"),
@@ -281,15 +295,19 @@ fn test_cli_all_format_combinations() {
         ("--from-screaming-snake", "--to-camel", "MY_NAME", "myName"),
     ];
 
-    for (idx, (from_arg, to_arg, input, expected)) in test_cases.iter().enumerate() {
-        let test_dir = std::env::temp_dir().join(format!("reformat_test_cli_combo_{}", idx));
+    for (from_arg, to_arg, input, expected) in test_cases.iter() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let test_dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&test_dir).unwrap();
 
         let test_file = test_dir.join("test.txt");
         fs::write(&test_file, input).unwrap();
 
         let output = Command::new(get_binary_path())
-            .args(&["convert", from_arg, to_arg, "-e", ".txt"])
+            .args(["convert", from_arg, to_arg, "-e", ".txt"])
             .arg(&test_file)
             .output()
             .expect("Failed to execute reformat");
@@ -303,8 +321,6 @@ fn test_cli_all_format_combinations() {
 
         let content = fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, *expected, "Failed for {} -> {}", from_arg, to_arg);
-
-        fs::remove_dir_all(&test_dir).unwrap();
     }
 }
 
@@ -312,14 +328,18 @@ fn test_cli_all_format_combinations() {
 
 #[test]
 fn test_cli_clean_basic() {
-    let test_dir = std::env::temp_dir().join("reformat_test_clean_basic");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.txt");
     fs::write(&test_file, "line1   \nline2\t\nline3\n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["clean"])
+        .args(["clean"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat clean");
@@ -331,13 +351,15 @@ fn test_cli_clean_basic() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Cleaned"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_clean_dry_run() {
-    let test_dir = std::env::temp_dir().join("reformat_test_clean_dry");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.txt");
@@ -345,7 +367,7 @@ fn test_cli_clean_dry_run() {
     fs::write(&test_file, original).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["clean", "--dry-run"])
+        .args(["clean", "--dry-run"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat clean");
@@ -358,13 +380,15 @@ fn test_cli_clean_dry_run() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[DRY-RUN]") || stdout.contains("Would clean"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_clean_recursive() {
-    let test_dir = std::env::temp_dir().join("reformat_test_clean_recursive");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let sub_dir = test_dir.join("subdir");
@@ -377,7 +401,7 @@ fn test_cli_clean_recursive() {
     fs::write(&file2, "line2\t\n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["clean", "-r"])
+        .args(["clean", "-r"])
         .arg(&test_dir)
         .output()
         .expect("Failed to execute reformat clean");
@@ -389,13 +413,15 @@ fn test_cli_clean_recursive() {
 
     assert_eq!(content1, "line1\n");
     assert_eq!(content2, "line2\n");
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_clean_extension_filtering() {
-    let test_dir = std::env::temp_dir().join("reformat_test_clean_exts");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let py_file = test_dir.join("test.py");
@@ -405,7 +431,7 @@ fn test_cli_clean_extension_filtering() {
     fs::write(&txt_file, "line1   \n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["clean", "-e", ".py"])
+        .args(["clean", "-e", ".py"])
         .arg(&test_dir)
         .output()
         .expect("Failed to execute reformat clean");
@@ -417,20 +443,22 @@ fn test_cli_clean_extension_filtering() {
 
     assert_eq!(py_content, "line1\n"); // Should be cleaned
     assert_eq!(txt_content, "line1   \n"); // Should not be cleaned
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_clean_no_changes_needed() {
-    let test_dir = std::env::temp_dir().join("reformat_test_clean_no_changes");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.txt");
     fs::write(&test_file, "line1\nline2\nline3\n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["clean"])
+        .args(["clean"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat clean");
@@ -439,14 +467,12 @@ fn test_cli_clean_no_changes_needed() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No files needed cleaning"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_clean_help() {
     let output = Command::new(get_binary_path())
-        .args(&["clean", "--help"])
+        .args(["clean", "--help"])
         .output()
         .expect("Failed to execute reformat clean --help");
 
@@ -457,14 +483,18 @@ fn test_cli_clean_help() {
 
 #[test]
 fn test_cli_convert_subcommand() {
-    let test_dir = std::env::temp_dir().join("reformat_test_convert_subcommand");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.py");
     fs::write(&test_file, "myVariable = 'test'").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["convert", "--from-camel", "--to-snake"])
+        .args(["convert", "--from-camel", "--to-snake"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat convert");
@@ -473,22 +503,24 @@ fn test_cli_convert_subcommand() {
 
     let content = fs::read_to_string(&test_file).unwrap();
     assert!(content.contains("my_variable"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 // Rename tests
 
 #[test]
 fn test_cli_rename_lowercase() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_lowercase");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("TestFile.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--to-lowercase"])
+        .args(["rename_files", "--to-lowercase"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -502,20 +534,22 @@ fn test_cli_rename_lowercase() {
     // Verify content is preserved
     let content = fs::read_to_string(&new_file).unwrap();
     assert_eq!(content, "content");
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_uppercase() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_uppercase");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("testfile.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--to-uppercase"])
+        .args(["rename_files", "--to-uppercase"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -529,20 +563,22 @@ fn test_cli_rename_uppercase() {
     // Verify content is preserved
     let content = fs::read_to_string(&new_file).unwrap();
     assert_eq!(content, "content");
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_capitalize() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_capitalize");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("testFile.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--to-capitalize"])
+        .args(["rename_files", "--to-capitalize"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -556,20 +592,22 @@ fn test_cli_rename_capitalize() {
     // Verify content is preserved
     let content = fs::read_to_string(&new_file).unwrap();
     assert_eq!(content, "content");
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_to_underscore() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_underscore");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test file.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--underscored"])
+        .args(["rename_files", "--underscored"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -577,20 +615,22 @@ fn test_cli_rename_to_underscore() {
     assert!(output.status.success());
     assert!(test_dir.join("test_file.txt").exists());
     assert!(!test_file.exists());
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_to_hyphen() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_hyphen");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test file.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--hyphenated"])
+        .args(["rename_files", "--hyphenated"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -598,20 +638,22 @@ fn test_cli_rename_to_hyphen() {
     assert!(output.status.success());
     assert!(test_dir.join("test-file.txt").exists());
     assert!(!test_file.exists());
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_add_prefix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_add_prefix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("file.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--add-prefix", "new_"])
+        .args(["rename_files", "--add-prefix", "new_"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -619,20 +661,22 @@ fn test_cli_rename_add_prefix() {
     assert!(output.status.success());
     assert!(test_dir.join("new_file.txt").exists());
     assert!(!test_file.exists());
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_rm_prefix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_rm_prefix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("old_file.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--rm-prefix", "old_"])
+        .args(["rename_files", "--rm-prefix", "old_"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -640,20 +684,22 @@ fn test_cli_rename_rm_prefix() {
     assert!(output.status.success());
     assert!(test_dir.join("file.txt").exists());
     assert!(!test_file.exists());
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_add_suffix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_add_suffix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("file.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--add-suffix", "_backup"])
+        .args(["rename_files", "--add-suffix", "_backup"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -661,20 +707,22 @@ fn test_cli_rename_add_suffix() {
     assert!(output.status.success());
     assert!(test_dir.join("file_backup.txt").exists());
     assert!(!test_file.exists());
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_rm_suffix() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_rm_suffix");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("file_old.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--rm-suffix", "_old"])
+        .args(["rename_files", "--rm-suffix", "_old"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -682,20 +730,22 @@ fn test_cli_rename_rm_suffix() {
     assert!(output.status.success());
     assert!(test_dir.join("file.txt").exists());
     assert!(!test_file.exists());
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_combined() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_combined");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("old_Test File.txt");
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&[
+        .args([
             "rename_files",
             "--rm-prefix",
             "old_",
@@ -711,13 +761,15 @@ fn test_cli_rename_combined() {
     assert!(output.status.success());
     assert!(test_dir.join("test_file_new.txt").exists());
     assert!(!test_file.exists());
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_dry_run() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_dry");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("TestFile.txt");
@@ -725,7 +777,7 @@ fn test_cli_rename_dry_run() {
     fs::write(&test_file, original_content).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--to-lowercase", "--dry-run"])
+        .args(["rename_files", "--to-lowercase", "--dry-run"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat rename");
@@ -739,13 +791,15 @@ fn test_cli_rename_dry_run() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[DRY-RUN]") || stdout.contains("Would rename"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_recursive() {
-    let test_dir = std::env::temp_dir().join("reformat_test_rename_recursive");
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let sub_dir = test_dir.join("subdir");
@@ -758,7 +812,7 @@ fn test_cli_rename_recursive() {
     fs::write(&file2, "content2").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--to-lowercase", "-r"])
+        .args(["rename_files", "--to-lowercase", "-r"])
         .arg(&test_dir)
         .output()
         .expect("Failed to execute reformat rename");
@@ -766,14 +820,12 @@ fn test_cli_rename_recursive() {
     assert!(output.status.success());
     assert!(test_dir.join("file1.txt").exists());
     assert!(sub_dir.join("file2.txt").exists());
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_rename_help() {
     let output = Command::new(get_binary_path())
-        .args(&["rename_files", "--help"])
+        .args(["rename_files", "--help"])
         .output()
         .expect("Failed to execute reformat rename --help");
 
@@ -785,8 +837,11 @@ fn test_cli_rename_help() {
 // Combined default command tests
 #[test]
 fn test_cli_combined_default() {
-    let test_dir = std::env::temp_dir().join("reformat_test_combined_default");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     // Create a file with uppercase name, emojis, and trailing whitespace
@@ -831,14 +886,15 @@ fn test_cli_combined_default() {
         "Trailing spaces should be removed"
     );
     assert!(!content.contains("\t\n"), "Trailing tabs should be removed");
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_combined_recursive() {
-    let test_dir = std::env::temp_dir().join("reformat_test_combined_recursive");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let sub_dir = test_dir.join("subdir");
@@ -851,7 +907,7 @@ fn test_cli_combined_recursive() {
     fs::write(&file2, "More text\t\n☐ Todo\n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["-r"])
+        .args(["-r"])
         .arg(&test_dir)
         .output()
         .expect("Failed to execute reformat -r");
@@ -863,24 +919,25 @@ fn test_cli_combined_recursive() {
     assert!(sub_dir.join("file2.md").exists());
 
     // Check content transformations for file1
-    let content1 = fs::read_to_string(&test_dir.join("file1.txt")).unwrap();
+    let content1 = fs::read_to_string(test_dir.join("file1.txt")).unwrap();
     assert!(content1.contains("[x]"));
     assert!(!content1.contains("✅"));
     assert!(!content1.contains("   \n"));
 
     // Check content transformations for file2
-    let content2 = fs::read_to_string(&sub_dir.join("file2.md")).unwrap();
+    let content2 = fs::read_to_string(sub_dir.join("file2.md")).unwrap();
     assert!(content2.contains("[ ]"));
     assert!(!content2.contains("☐"));
     assert!(!content2.contains("\t\n"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_combined_dry_run() {
-    let test_dir = std::env::temp_dir().join("reformat_test_combined_dry");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("TestFile.txt");
@@ -888,7 +945,7 @@ fn test_cli_combined_dry_run() {
     fs::write(&test_file, original_content).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--dry-run"])
+        .args(["--dry-run"])
         .arg(&test_file)
         .output()
         .expect("Failed to execute reformat --dry-run");
@@ -903,14 +960,15 @@ fn test_cli_combined_dry_run() {
     // Output should indicate dry-run mode
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[DRY-RUN]") || stdout.contains("Would"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_cli_combined_no_changes_needed() {
-    let test_dir = std::env::temp_dir().join("reformat_test_combined_nochange");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     // Create a file that already meets all criteria
@@ -931,8 +989,6 @@ fn test_cli_combined_no_changes_needed() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No files needed processing"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 // =============================================================================
@@ -941,8 +997,11 @@ fn test_cli_combined_no_changes_needed() {
 
 #[test]
 fn test_preset_clean_step() {
-    let test_dir = std::env::temp_dir().join("reformat_test_preset_clean");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     // Create a reformat.json in the test dir
@@ -957,7 +1016,7 @@ fn test_preset_clean_step() {
     fs::write(&test_file, "hello   \nworld\t\n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["-p", "tidy"])
+        .args(["-p", "tidy"])
         .arg(&test_dir)
         .current_dir(&test_dir)
         .output()
@@ -975,14 +1034,15 @@ fn test_preset_clean_step() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("clean:"));
     assert!(stdout.contains("Pipeline 'tidy' complete."));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_preset_rename_step() {
-    let test_dir = std::env::temp_dir().join("reformat_test_preset_rename");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     fs::write(
@@ -995,7 +1055,7 @@ fn test_preset_rename_step() {
     fs::write(&test_file, "content").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["-p", "lower"])
+        .args(["-p", "lower"])
         .arg(&test_dir)
         .current_dir(&test_dir)
         .output()
@@ -1011,22 +1071,19 @@ fn test_preset_rename_step() {
     let entries: Vec<_> = fs::read_dir(&test_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .map_or(false, |n| n.ends_with(".txt"))
-        })
+        .filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".txt")))
         .collect();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].file_name().to_str().unwrap(), "myfile.txt");
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_preset_multi_step() {
-    let test_dir = std::env::temp_dir().join("reformat_test_preset_multi");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     fs::write(
@@ -1039,7 +1096,7 @@ fn test_preset_multi_step() {
     fs::write(&test_file, "x = 1   \ny = 2\t\n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["-p", "all"])
+        .args(["-p", "all"])
         .arg(&test_dir)
         .current_dir(&test_dir)
         .output()
@@ -1057,7 +1114,7 @@ fn test_preset_multi_step() {
     let entries: Vec<_> = fs::read_dir(&test_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_str().map_or(false, |n| n.ends_with(".py")))
+        .filter(|e| e.file_name().to_str().is_some_and(|n| n.ends_with(".py")))
         .collect();
     assert_eq!(entries.len(), 1);
     let actual_name = entries[0].file_name();
@@ -1065,14 +1122,15 @@ fn test_preset_multi_step() {
 
     let content = fs::read_to_string(entries[0].path()).unwrap();
     assert_eq!(content, "x = 1\ny = 2\n");
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_preset_dry_run_override() {
-    let test_dir = std::env::temp_dir().join("reformat_test_preset_dryrun");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     fs::write(
@@ -1086,7 +1144,7 @@ fn test_preset_dry_run_override() {
     fs::write(&test_file, original).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["-p", "tidy", "--dry-run"])
+        .args(["-p", "tidy", "--dry-run"])
         .arg(&test_dir)
         .current_dir(&test_dir)
         .output()
@@ -1101,19 +1159,20 @@ fn test_preset_dry_run_override() {
     // File should be unchanged in dry-run
     let content = fs::read_to_string(&test_file).unwrap();
     assert_eq!(content, original);
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_preset_missing_config_file() {
-    let test_dir = std::env::temp_dir().join("reformat_test_preset_noconfig");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     // No reformat.json created
     let output = Command::new(get_binary_path())
-        .args(&["-p", "whatever"])
+        .args(["-p", "whatever"])
         .arg(&test_dir)
         .current_dir(&test_dir)
         .output()
@@ -1122,14 +1181,15 @@ fn test_preset_missing_config_file() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("reformat.json not found"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_preset_unknown_preset_name() {
-    let test_dir = std::env::temp_dir().join("reformat_test_preset_unknown");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     fs::write(
@@ -1139,7 +1199,7 @@ fn test_preset_unknown_preset_name() {
     .unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["-p", "nonexistent"])
+        .args(["-p", "nonexistent"])
         .arg(&test_dir)
         .current_dir(&test_dir)
         .output()
@@ -1148,16 +1208,17 @@ fn test_preset_unknown_preset_name() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("preset 'nonexistent' not found"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 // ==================== Job tests ====================
 
 #[test]
 fn test_job_from_file() {
-    let test_dir = std::env::temp_dir().join("reformat_test_job_file");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let job_file = test_dir.join("job.json");
@@ -1167,7 +1228,7 @@ fn test_job_from_file() {
     fs::write(&test_file, "hello   \nworld  \n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--job"])
+        .args(["--job"])
         .arg(&job_file)
         .arg(&test_dir)
         .output()
@@ -1185,21 +1246,22 @@ fn test_job_from_file() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Pipeline"));
     assert!(stdout.contains("complete."));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_job_from_stdin() {
-    let test_dir = std::env::temp_dir().join("reformat_test_job_stdin");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let test_file = test_dir.join("test.txt");
     fs::write(&test_file, "hello   \n").unwrap();
 
     let mut child = Command::new(get_binary_path())
-        .args(&["--job", "-"])
+        .args(["--job", "-"])
         .arg(&test_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1224,14 +1286,15 @@ fn test_job_from_stdin() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Pipeline 'stdin' complete."));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_job_multi_step() {
-    let test_dir = std::env::temp_dir().join("reformat_test_job_multi");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let job_file = test_dir.join("job.json");
@@ -1252,7 +1315,7 @@ fn test_job_multi_step() {
     fs::write(&test_file, "foo   \nfoo baz  \n").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--job"])
+        .args(["--job"])
         .arg(&job_file)
         .arg(&test_dir)
         .output()
@@ -1266,14 +1329,15 @@ fn test_job_multi_step() {
 
     let content = fs::read_to_string(&test_file).unwrap();
     assert_eq!(content, "bar\nbar baz\n");
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_job_dry_run() {
-    let test_dir = std::env::temp_dir().join("reformat_test_job_dry");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let job_file = test_dir.join("job.json");
@@ -1284,7 +1348,7 @@ fn test_job_dry_run() {
     fs::write(&test_file, original).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--job"])
+        .args(["--job"])
         .arg(&job_file)
         .arg("--dry-run")
         .arg(&test_dir)
@@ -1300,18 +1364,19 @@ fn test_job_dry_run() {
     // File should be unchanged
     let content = fs::read_to_string(&test_file).unwrap();
     assert_eq!(content, original);
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_job_missing_file() {
-    let test_dir = std::env::temp_dir().join("reformat_test_job_missing");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--job", "/nonexistent/job.json"])
+        .args(["--job", "/nonexistent/job.json"])
         .arg(&test_dir)
         .output()
         .expect("Failed to execute reformat");
@@ -1319,21 +1384,22 @@ fn test_job_missing_file() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("failed to read job file"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_job_invalid_json() {
-    let test_dir = std::env::temp_dir().join("reformat_test_job_badjson");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let job_file = test_dir.join("job.json");
     fs::write(&job_file, "not valid json {{{").unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--job"])
+        .args(["--job"])
         .arg(&job_file)
         .arg(&test_dir)
         .output()
@@ -1342,21 +1408,22 @@ fn test_job_invalid_json() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("failed to parse job"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_job_unknown_step() {
-    let test_dir = std::env::temp_dir().join("reformat_test_job_badstep");
-    let _ = fs::remove_dir_all(&test_dir);
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
     fs::create_dir_all(&test_dir).unwrap();
 
     let job_file = test_dir.join("job.json");
     fs::write(&job_file, r#"{"steps": ["clean", "bogus"]}"#).unwrap();
 
     let output = Command::new(get_binary_path())
-        .args(&["--job"])
+        .args(["--job"])
         .arg(&job_file)
         .arg(&test_dir)
         .output()
@@ -1365,14 +1432,12 @@ fn test_job_unknown_step() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unknown step 'bogus'"));
-
-    fs::remove_dir_all(&test_dir).unwrap();
 }
 
 #[test]
 fn test_job_conflicts_with_preset() {
     let output = Command::new(get_binary_path())
-        .args(&["--job", "job.json", "-p", "code", "."])
+        .args(["--job", "job.json", "-p", "code", "."])
         .output()
         .expect("Failed to execute reformat");
 
@@ -1383,4 +1448,296 @@ fn test_job_conflicts_with_preset() {
         "stderr should mention conflict: {}",
         stderr
     );
+}
+
+/// The preset path used to hardcode `None` for convert's strip/replace affix
+/// settings, so these keys were silently unreachable from a preset even
+/// though `ConvertConfig` defined them. Both paths now build the same config.
+#[test]
+fn test_preset_convert_supports_affix_options() {
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
+    fs::create_dir_all(&test_dir).unwrap();
+
+    fs::write(test_dir.join("code.py"), "m_userName = 1\n").unwrap();
+    fs::write(
+        test_dir.join("reformat.json"),
+        r#"{
+            "strip": {
+                "steps": ["convert"],
+                "convert": {
+                    "from_format": "camel",
+                    "to_format": "snake",
+                    "file_extensions": [".py"],
+                    "strip_prefix": "m_"
+                }
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(["-p", "strip", "."])
+        .current_dir(&test_dir)
+        .output()
+        .expect("Failed to run preset");
+
+    assert!(output.status.success(), "{:?}", output);
+    assert_eq!(
+        fs::read_to_string(test_dir.join("code.py")).unwrap(),
+        "user_name = 1\n",
+        "convert.strip_prefix had no effect from a preset"
+    );
+}
+
+/// Acronyms survive conversion end to end.
+#[test]
+fn test_cli_convert_preserves_acronyms() {
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
+    fs::create_dir_all(&test_dir).unwrap();
+    fs::write(test_dir.join("a.py"), "parseHTTPResponse()\n").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(["convert", "--from-camel", "--to-snake", "-r", "."])
+        .current_dir(&test_dir)
+        .output()
+        .expect("Failed to run convert");
+
+    assert!(output.status.success());
+    assert_eq!(
+        fs::read_to_string(test_dir.join("a.py")).unwrap(),
+        "parse_http_response()\n"
+    );
+}
+
+/// --quiet must silence the per-file reporting that used to be printed
+/// straight from the library.
+#[test]
+fn test_cli_quiet_suppresses_output() {
+    // A unique directory per test: these run in parallel, and a shared
+    // fixture path lets them clobber each other. TempDir also cleans up
+    // when a test panics, which explicit teardown at the end does not.
+    let _tmp = tempfile::tempdir().unwrap();
+    let test_dir = _tmp.path().to_path_buf();
+    fs::create_dir_all(&test_dir).unwrap();
+    fs::write(test_dir.join("a.txt"), "line  \n").unwrap();
+
+    let output = Command::new(get_binary_path())
+        .args(["-q", "clean", "-r", "."])
+        .current_dir(&test_dir)
+        .output()
+        .expect("Failed to run clean");
+
+    assert!(output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "--quiet still produced output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    // The work itself still happened.
+    assert_eq!(
+        fs::read_to_string(test_dir.join("a.txt")).unwrap(),
+        "line\n"
+    );
+}
+
+/// A path that does not exist is an error, not a silent success.
+#[test]
+fn test_cli_missing_path_is_an_error() {
+    for args in [
+        vec!["clean", "/nonexistent/reformat/zzz"],
+        vec![
+            "convert",
+            "--from-camel",
+            "--to-snake",
+            "/nonexistent/reformat/zzz",
+        ],
+    ] {
+        let output = Command::new(get_binary_path())
+            .args(&args)
+            .output()
+            .expect("Failed to run");
+        assert!(
+            !output.status.success(),
+            "{:?} exited 0 on a missing path",
+            args
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subcommands that previously had no CLI coverage at all: group, endings,
+// indent and header. `group` is the most destructive of the nine -- it moves
+// files and rewrites references -- and had none.
+// ---------------------------------------------------------------------------
+
+fn fixture() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("reformat-cli-")
+        .tempdir()
+        .unwrap()
+}
+
+fn run(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(get_binary_path())
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("failed to run reformat")
+}
+
+#[test]
+fn test_cli_group_moves_files_into_prefix_directories() {
+    let tmp = fixture();
+    let dir = tmp.path();
+    for name in ["wbs_create.tmpl", "wbs_delete.tmpl", "other.tmpl"] {
+        fs::write(dir.join(name), "x").unwrap();
+    }
+
+    let output = run(dir, &["group", "--no-interactive", "."]);
+    assert!(output.status.success(), "{:?}", output);
+
+    assert!(dir.join("wbs/wbs_create.tmpl").exists());
+    assert!(dir.join("wbs/wbs_delete.tmpl").exists());
+    assert!(dir.join("other.tmpl").exists(), "ungrouped file was moved");
+    assert!(dir.join("changes.json").exists());
+}
+
+#[test]
+fn test_cli_group_strip_prefix_and_preview() {
+    let tmp = fixture();
+    let dir = tmp.path();
+    for name in ["wbs_create.tmpl", "wbs_delete.tmpl"] {
+        fs::write(dir.join(name), "x").unwrap();
+    }
+
+    // --preview must not touch anything.
+    let output = run(dir, &["group", "--preview", "."]);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("wbs"));
+    assert!(dir.join("wbs_create.tmpl").exists(), "preview moved files");
+
+    let output = run(dir, &["group", "--no-interactive", "--strip-prefix", "."]);
+    assert!(output.status.success(), "{:?}", output);
+    assert!(dir.join("wbs/create.tmpl").exists());
+    assert!(dir.join("wbs/delete.tmpl").exists());
+}
+
+#[test]
+fn test_cli_group_dry_run_writes_nothing() {
+    let tmp = fixture();
+    let dir = tmp.path();
+    for name in ["a_one.txt", "a_two.txt"] {
+        fs::write(dir.join(name), "x").unwrap();
+    }
+
+    let output = run(dir, &["group", "-d", "--no-interactive", "."]);
+    assert!(output.status.success());
+    assert!(dir.join("a_one.txt").exists(), "dry run moved a file");
+    assert!(
+        !dir.join("changes.json").exists(),
+        "dry run left a changes.json describing moves that never happened"
+    );
+}
+
+#[test]
+fn test_cli_endings_normalizes_and_preserves_content() {
+    let tmp = fixture();
+    let dir = tmp.path();
+    fs::write(dir.join("a.txt"), "one\r\ntwo\r\n").unwrap();
+
+    assert!(run(dir, &["endings", "--style", "lf", "."])
+        .status
+        .success());
+    assert_eq!(fs::read(dir.join("a.txt")).unwrap(), b"one\ntwo\n");
+
+    assert!(run(dir, &["endings", "--style", "crlf", "."])
+        .status
+        .success());
+    assert_eq!(fs::read(dir.join("a.txt")).unwrap(), b"one\r\ntwo\r\n");
+}
+
+#[test]
+fn test_cli_endings_rejects_unknown_style() {
+    let tmp = fixture();
+    let output = run(tmp.path(), &["endings", "--style", "nonsense", "."]);
+    assert!(!output.status.success(), "an unknown style should fail");
+}
+
+#[test]
+fn test_cli_indent_converts_tabs_and_spaces() {
+    let tmp = fixture();
+    let dir = tmp.path();
+    fs::write(dir.join("a.py"), "\tif x:\n\t\tpass\n").unwrap();
+
+    assert!(
+        run(dir, &["indent", "--style", "spaces", "--width", "4", "."])
+            .status
+            .success()
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("a.py")).unwrap(),
+        "    if x:\n        pass\n"
+    );
+
+    assert!(
+        run(dir, &["indent", "--style", "tabs", "--width", "4", "."])
+            .status
+            .success()
+    );
+    assert_eq!(
+        fs::read_to_string(dir.join("a.py")).unwrap(),
+        "\tif x:\n\t\tpass\n"
+    );
+}
+
+#[test]
+fn test_cli_indent_rejects_unknown_style() {
+    let tmp = fixture();
+    let output = run(tmp.path(), &["indent", "--style", "nonsense", "."]);
+    assert!(!output.status.success(), "an unknown style should fail");
+}
+
+#[test]
+fn test_cli_header_inserts_then_updates_in_place() {
+    let tmp = fixture();
+    let dir = tmp.path();
+    fs::write(dir.join("a.rs"), "fn main() {}\n").unwrap();
+
+    assert!(run(dir, &["header", "-t", "// (c) 2020 Acme", "."])
+        .status
+        .success());
+    assert_eq!(
+        fs::read_to_string(dir.join("a.rs")).unwrap(),
+        "// (c) 2020 Acme\n\nfn main() {}\n"
+    );
+
+    // A different year must replace the header, not stack a second one on top.
+    assert!(run(dir, &["header", "-t", "// (c) 2026 Acme", "."])
+        .status
+        .success());
+    let content = fs::read_to_string(dir.join("a.rs")).unwrap();
+    assert_eq!(content, "// (c) 2026 Acme\n\nfn main() {}\n");
+    assert_eq!(content.matches("Acme").count(), 1);
+}
+
+#[test]
+fn test_cli_header_preserves_shebang() {
+    let tmp = fixture();
+    let dir = tmp.path();
+    fs::write(dir.join("a.py"), "#!/usr/bin/env python\nprint(1)\n").unwrap();
+
+    assert!(run(dir, &["header", "-t", "# (c) Acme", "-e", ".py", "."])
+        .status
+        .success());
+    let content = fs::read_to_string(dir.join("a.py")).unwrap();
+    assert!(content.starts_with("#!/usr/bin/env python\n"));
+    assert!(content.contains("# (c) Acme"));
 }

@@ -3,7 +3,6 @@
 use regex::Regex;
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
 /// A single find-and-replace pattern
 #[derive(Debug, Clone)]
@@ -81,30 +80,12 @@ impl ContentReplacer {
             return false;
         }
 
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| s.starts_with('.'))
-                .unwrap_or(false)
-        }) {
-            return false;
-        }
-
-        let skip_dirs = [
-            "build",
-            "__pycache__",
-            ".git",
-            "node_modules",
-            "venv",
-            ".venv",
-            "target",
-        ];
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| skip_dirs.contains(&s))
-                .unwrap_or(false)
-        }) {
+        // Skip hidden entries and build/vendor directories (see crate::walk)
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| crate::walk::is_excluded_component(n, crate::walk::DEFAULT_SKIP_DIRS))
+        {
             return false;
         }
 
@@ -126,7 +107,10 @@ impl ContentReplacer {
             return Ok(0);
         }
 
-        let content = fs::read_to_string(path)?;
+        let content = match crate::text::read_text(path)? {
+            Some(c) => c,
+            None => return Ok(0),
+        };
         let mut current = content.clone();
         let mut total_replacements = 0;
 
@@ -142,14 +126,14 @@ impl ContentReplacer {
 
         if total_replacements > 0 {
             if self.options.dry_run {
-                println!(
+                log::info!(
                     "Would make {} replacement(s) in '{}'",
                     total_replacements,
                     path.display()
                 );
             } else {
                 fs::write(path, &current)?;
-                println!(
+                log::info!(
                     "Made {} replacement(s) in '{}'",
                     total_replacements,
                     path.display()
@@ -172,27 +156,11 @@ impl ContentReplacer {
                 total_replacements = replacements;
             }
         } else if path.is_dir() {
-            if self.options.recursive {
-                for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-                    if entry.file_type().is_file() {
-                        let replacements = self.replace_file(entry.path())?;
-                        if replacements > 0 {
-                            total_files += 1;
-                            total_replacements += replacements;
-                        }
-                    }
-                }
-            } else {
-                for entry in fs::read_dir(path)? {
-                    let entry = entry?;
-                    let entry_path = entry.path();
-                    if entry_path.is_file() {
-                        let replacements = self.replace_file(&entry_path)?;
-                        if replacements > 0 {
-                            total_files += 1;
-                            total_replacements += replacements;
-                        }
-                    }
+            for entry in crate::walk::walk_files(path, self.options.recursive) {
+                let replacements = self.replace_file(entry.path())?;
+                if replacements > 0 {
+                    total_files += 1;
+                    total_replacements += replacements;
                 }
             }
         }
@@ -224,7 +192,11 @@ mod tests {
 
     #[test]
     fn test_simple_replacement() {
-        let dir = std::env::temp_dir().join("reformat_replace_simple");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -245,13 +217,15 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "greetings world\ngreetings rust\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_regex_pattern() {
-        let dir = std::env::temp_dir().join("reformat_replace_regex");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -272,13 +246,15 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "num_123 num_456 baz\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_multiple_patterns_sequential() {
-        let dir = std::env::temp_dir().join("reformat_replace_multi");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -302,13 +278,15 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "Copyright 2025 NewCorp\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_no_matches() {
-        let dir = std::env::temp_dir().join("reformat_replace_none");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -326,8 +304,6 @@ mod tests {
 
         assert_eq!(files, 0);
         assert_eq!(replacements, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -346,7 +322,11 @@ mod tests {
 
     #[test]
     fn test_dry_run() {
-        let dir = std::env::temp_dir().join("reformat_replace_dry");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -367,13 +347,15 @@ mod tests {
         assert_eq!(replacements, 1);
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, original);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_empty_patterns() {
-        let dir = std::env::temp_dir().join("reformat_replace_empty");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -387,13 +369,15 @@ mod tests {
         let (files, _) = replacer.process(&file).unwrap();
 
         assert_eq!(files, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_recursive_replacement() {
-        let dir = std::env::temp_dir().join("reformat_replace_recursive");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let sub = dir.join("sub");
@@ -415,13 +399,15 @@ mod tests {
         let (files, _) = replacer.process(&dir).unwrap();
 
         assert_eq!(files, 2);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_capture_group_replacement() {
-        let dir = std::env::temp_dir().join("reformat_replace_capture");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.txt");
@@ -439,7 +425,5 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "call(b, a)\ncall(y, x)\n");
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

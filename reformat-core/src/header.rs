@@ -3,7 +3,6 @@
 use regex::Regex;
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
 /// Options for header management
 #[derive(Debug, Clone)]
@@ -62,8 +61,13 @@ impl HeaderManager {
         let header_detector =
             if !resolved_header.is_empty() {
                 let escaped = regex::escape(&resolved_header);
-                // Replace any 4-digit year (19xx or 20xx) with a flexible year pattern
-                let flexible = Regex::new(r"(?:19|20)\d\{2\}")
+                // Replace any 4-digit year (19xx or 20xx) with a flexible year
+                // pattern, so a header written in a previous year is still
+                // recognised. Note `\d{2}` here is a quantifier: escaping the
+                // braces (`\d\{2\}`) made this match a literal "{2}", so the
+                // substitution never fired and year updates silently inserted
+                // a second header instead of replacing the first.
+                let flexible = Regex::new(r"(?:19|20)\d{2}")
                     .unwrap()
                     .replace_all(&escaped, r"\d{4}")
                     .to_string();
@@ -81,36 +85,30 @@ impl HeaderManager {
         })
     }
 
+    /// Byte offset at which a header may legitimately begin: the start of the
+    /// file, skipping a shebang line and any leading blank lines.
+    fn header_zone(content: &str) -> usize {
+        let mut pos = 0;
+        if content.starts_with("#!") {
+            pos = content.find('\n').map(|i| i + 1).unwrap_or(content.len());
+        }
+        let rest = &content[pos..];
+        let trimmed = rest.trim_start_matches(['\n', '\r', ' ', '\t']);
+        pos + (rest.len() - trimmed.len())
+    }
+
     /// Checks if a file should be processed
     fn should_process(&self, path: &Path) -> bool {
         if !path.is_file() {
             return false;
         }
 
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| s.starts_with('.'))
-                .unwrap_or(false)
-        }) {
-            return false;
-        }
-
-        let skip_dirs = [
-            "build",
-            "__pycache__",
-            ".git",
-            "node_modules",
-            "venv",
-            ".venv",
-            "target",
-        ];
-        if path.components().any(|c| {
-            c.as_os_str()
-                .to_str()
-                .map(|s| skip_dirs.contains(&s))
-                .unwrap_or(false)
-        }) {
+        // Skip hidden entries and build/vendor directories (see crate::walk)
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| crate::walk::is_excluded_component(n, crate::walk::DEFAULT_SKIP_DIRS))
+        {
             return false;
         }
 
@@ -132,11 +130,22 @@ impl HeaderManager {
             return Ok(false);
         }
 
-        let content = fs::read_to_string(path)?;
+        let content = match crate::text::read_text(path)? {
+            Some(c) => c,
+            None => return Ok(false),
+        };
 
-        // Check if header already exists (possibly with a different year)
+        // Check if header already exists (possibly with a different year).
+        // Detection is anchored to the header zone -- the top of the file,
+        // after any shebang and leading blank lines -- so that a year-variant
+        // string elsewhere in the body (a test fixture, a vendored blob) is
+        // not mistaken for this file's own header and rewritten.
+        let zone = Self::header_zone(&content);
         if let Some(ref detector) = self.header_detector {
-            if let Some(m) = detector.find(&content) {
+            if let Some(m) = detector
+                .find_at(&content, zone)
+                .filter(|m| m.start() == zone)
+            {
                 // Header exists -- check if it needs a year update
                 let existing = &content[m.start()..m.end()];
                 if existing == self.resolved_header {
@@ -151,10 +160,10 @@ impl HeaderManager {
                 let full = format!("{}{}", prefix, new_content);
 
                 if self.options.dry_run {
-                    println!("Would update header in '{}'", path.display());
+                    log::info!("Would update header in '{}'", path.display());
                 } else {
                     fs::write(path, &full)?;
-                    println!("Updated header in '{}'", path.display());
+                    log::info!("Updated header in '{}'", path.display());
                 }
                 return Ok(true);
             }
@@ -179,10 +188,10 @@ impl HeaderManager {
         };
 
         if self.options.dry_run {
-            println!("Would insert header in '{}'", path.display());
+            log::info!("Would insert header in '{}'", path.display());
         } else {
             fs::write(path, &new_content)?;
-            println!("Inserted header in '{}'", path.display());
+            log::info!("Inserted header in '{}'", path.display());
         }
 
         Ok(true)
@@ -200,21 +209,10 @@ impl HeaderManager {
                 total_ops = 1;
             }
         } else if path.is_dir() {
-            if self.options.recursive {
-                for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-                    if entry.file_type().is_file() && self.process_file(entry.path())? {
-                        total_files += 1;
-                        total_ops += 1;
-                    }
-                }
-            } else {
-                for entry in fs::read_dir(path)? {
-                    let entry = entry?;
-                    let entry_path = entry.path();
-                    if entry_path.is_file() && self.process_file(&entry_path)? {
-                        total_files += 1;
-                        total_ops += 1;
-                    }
+            for entry in crate::walk::walk_files(path, self.options.recursive) {
+                if self.process_file(entry.path())? {
+                    total_files += 1;
+                    total_ops += 1;
                 }
             }
         }
@@ -230,7 +228,11 @@ mod tests {
 
     #[test]
     fn test_insert_header() {
-        let dir = std::env::temp_dir().join("reformat_header_insert");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.rs");
@@ -248,13 +250,15 @@ mod tests {
         let content = fs::read_to_string(&file).unwrap();
         assert!(content.starts_with("// Copyright 2025 TestCorp\n\n"));
         assert!(content.contains("fn main() {}"));
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_header_already_present() {
-        let dir = std::env::temp_dir().join("reformat_header_exists");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.rs");
@@ -272,21 +276,28 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, original);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// An existing header carrying a different year must be *replaced*, not
+    /// shadowed by a second header inserted above it. Asserting only
+    /// `starts_with` is not enough: that passes when the old header is
+    /// duplicated below the new one, which is exactly what used to happen.
     #[test]
     fn test_update_year_in_header() {
-        let dir = std::env::temp_dir().join("reformat_header_year");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.rs");
         fs::write(&file, "// Copyright 2020 TestCorp\n\nfn main() {}\n").unwrap();
 
         let current_year = chrono::Utc::now().format("%Y").to_string();
+        let header = format!("// Copyright {} TestCorp", current_year);
         let options = HeaderOptions {
-            text: format!("// Copyright {} TestCorp", current_year),
+            text: header.clone(),
             ..Default::default()
         };
         let manager = HeaderManager::new(options).unwrap();
@@ -295,14 +306,104 @@ mod tests {
         assert_eq!(files, 1);
 
         let content = fs::read_to_string(&file).unwrap();
-        assert!(content.starts_with(&format!("// Copyright {} TestCorp", current_year)));
+        assert_eq!(
+            content,
+            format!("{}\n\nfn main() {{}}\n", header),
+            "the old header should have been replaced in place"
+        );
+        assert!(
+            !content.contains("2020"),
+            "the superseded year is still present -- the header was duplicated"
+        );
+        assert_eq!(
+            content.matches("TestCorp").count(),
+            1,
+            "the file gained a second header instead of having one updated"
+        );
+    }
 
-        fs::remove_dir_all(&dir).unwrap();
+    /// The `{year}` template plus `--update-year` must be idempotent across
+    /// years: running it in successive years leaves exactly one header.
+    #[test]
+    fn test_update_year_is_idempotent_across_years() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        let file = dir.join("test.rs");
+        // Simulates a header written in a previous year.
+        fs::write(&file, "// Copyright 1999 TestCorp\n\nfn main() {}\n").unwrap();
+
+        let options = HeaderOptions {
+            text: "// Copyright {year} TestCorp".to_string(),
+            update_year: true,
+            ..Default::default()
+        };
+
+        // First run updates 1999 -> current year.
+        let manager = HeaderManager::new(options.clone()).unwrap();
+        assert!(manager.process_file(&file).unwrap());
+
+        // Second run is a no-op: the header already carries the current year.
+        let manager = HeaderManager::new(options).unwrap();
+        assert!(
+            !manager.process_file(&file).unwrap(),
+            "a second run in the same year should change nothing"
+        );
+
+        let content = fs::read_to_string(&file).unwrap();
+        let year = chrono::Utc::now().format("%Y").to_string();
+        assert_eq!(
+            content,
+            format!("// Copyright {} TestCorp\n\nfn main() {{}}\n", year)
+        );
+        assert_eq!(content.matches("Copyright").count(), 1);
+    }
+
+    /// A year-variant header buried in the body of a file (a test fixture, a
+    /// vendored blob) must not be mistaken for the file's own header.
+    #[test]
+    fn test_header_detection_is_anchored_to_top_of_file() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        let file = dir.join("test.rs");
+        let body = "fn main() {}\n\nconst FIXTURE: &str = \"// Copyright 2020 TestCorp\";\n";
+        fs::write(&file, body).unwrap();
+
+        let header = "// Copyright 2026 TestCorp".to_string();
+        let options = HeaderOptions {
+            text: header.clone(),
+            ..Default::default()
+        };
+        let manager = HeaderManager::new(options).unwrap();
+        manager.process_file(&file).unwrap();
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert!(
+            content.starts_with(&header),
+            "the header should have been inserted at the top"
+        );
+        assert!(
+            content.contains("// Copyright 2020 TestCorp\";"),
+            "the mid-file fixture string was rewritten"
+        );
     }
 
     #[test]
     fn test_preserve_shebang() {
-        let dir = std::env::temp_dir().join("reformat_header_shebang");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.py");
@@ -320,13 +421,15 @@ mod tests {
         assert!(content.starts_with("#!/usr/bin/env python\n"));
         assert!(content.contains("# Copyright 2025 TestCorp"));
         assert!(content.contains("print('hello')"));
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_dry_run() {
-        let dir = std::env::temp_dir().join("reformat_header_dry");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.rs");
@@ -344,13 +447,15 @@ mod tests {
         assert_eq!(files, 1);
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, original);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_empty_header() {
-        let dir = std::env::temp_dir().join("reformat_header_empty");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.rs");
@@ -364,13 +469,15 @@ mod tests {
         let (files, _) = manager.process(&file).unwrap();
 
         assert_eq!(files, 0);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_year_template_substitution() {
-        let dir = std::env::temp_dir().join("reformat_header_template");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.rs");
@@ -387,13 +494,15 @@ mod tests {
         let current_year = chrono::Utc::now().format("%Y").to_string();
         let content = fs::read_to_string(&file).unwrap();
         assert!(content.contains(&format!("Copyright {} TestCorp", current_year)));
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_recursive_processing() {
-        let dir = std::env::temp_dir().join("reformat_header_recursive");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let sub = dir.join("sub");
@@ -412,13 +521,15 @@ mod tests {
         let (files, _) = manager.process(&dir).unwrap();
 
         assert_eq!(files, 2);
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn test_multiline_header() {
-        let dir = std::env::temp_dir().join("reformat_header_multiline");
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
         let file = dir.join("test.rs");
@@ -436,7 +547,5 @@ mod tests {
         assert!(content.starts_with(
             "// Copyright 2025 TestCorp\n// Licensed under MIT\n// All rights reserved\n\n"
         ));
-
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

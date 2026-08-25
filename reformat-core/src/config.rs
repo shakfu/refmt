@@ -8,13 +8,22 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::case::CaseFormat;
-use crate::rename::{CaseTransform, SpaceReplace};
+use crate::converter::CaseConverter;
+use crate::emoji::EmojiOptions;
+use crate::endings::{EndingsOptions, LineEnding};
+use crate::group::GroupOptions;
+use crate::header::HeaderOptions;
+use crate::indent::{IndentOptions, IndentStyle};
+use crate::rename::{CaseTransform, RenameOptions, SpaceReplace, TimestampFormat};
+use crate::replace::{ReplaceOptions, ReplacePattern};
+use crate::whitespace::WhitespaceOptions;
 
 /// Root configuration: a map of preset names to preset definitions.
 pub type ReformatConfig = HashMap<String, Preset>;
 
 /// A named preset defining an ordered list of transformation steps.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Preset {
     /// Ordered list of step names to execute.
     /// Valid values: "rename", "emojis", "clean", "convert", "group"
@@ -61,34 +70,62 @@ pub fn validate_steps(preset_name: &str, steps: &[String]) -> crate::Result<()> 
 
 /// Configuration for the rename step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RenameConfig {
     pub case_transform: Option<String>,
     pub space_replace: Option<String>,
     pub recursive: Option<bool>,
     pub include_symlinks: Option<bool>,
+    pub add_prefix: Option<String>,
+    pub remove_prefix: Option<String>,
+    pub add_suffix: Option<String>,
+    pub remove_suffix: Option<String>,
+    /// Two entries: the prefix to match and its replacement.
+    pub replace_prefix: Option<Vec<String>>,
+    /// Two entries: the suffix to match and its replacement.
+    pub replace_suffix: Option<Vec<String>>,
+    /// "long" (YYYYMMDD) or "short" (YYMMDD).
+    pub timestamp: Option<String>,
 }
 
 impl RenameConfig {
-    pub fn parse_case_transform(&self) -> Option<CaseTransform> {
-        self.case_transform.as_deref().map(|s| match s {
-            "lowercase" => CaseTransform::Lowercase,
-            "uppercase" => CaseTransform::Uppercase,
-            "capitalize" => CaseTransform::Capitalize,
-            _ => CaseTransform::None,
-        })
+    /// Parses `case_transform`, rejecting unrecognised values.
+    ///
+    /// An unknown value used to fall through to `CaseTransform::None`, so a
+    /// typo such as `"lowercse"` silently disabled the transform with no
+    /// diagnostic at all.
+    pub fn parse_case_transform(&self) -> crate::Result<Option<CaseTransform>> {
+        match self.case_transform.as_deref() {
+            None => Ok(None),
+            Some("lowercase") => Ok(Some(CaseTransform::Lowercase)),
+            Some("uppercase") => Ok(Some(CaseTransform::Uppercase)),
+            Some("capitalize") => Ok(Some(CaseTransform::Capitalize)),
+            Some("none") => Ok(Some(CaseTransform::None)),
+            Some(other) => anyhow::bail!(
+                "unknown rename.case_transform '{}'. Valid values: lowercase, uppercase, capitalize, none",
+                other
+            ),
+        }
     }
 
-    pub fn parse_space_replace(&self) -> Option<SpaceReplace> {
-        self.space_replace.as_deref().map(|s| match s {
-            "underscore" => SpaceReplace::Underscore,
-            "hyphen" => SpaceReplace::Hyphen,
-            _ => SpaceReplace::None,
-        })
+    /// Parses `space_replace`, rejecting unrecognised values.
+    pub fn parse_space_replace(&self) -> crate::Result<Option<SpaceReplace>> {
+        match self.space_replace.as_deref() {
+            None => Ok(None),
+            Some("underscore") => Ok(Some(SpaceReplace::Underscore)),
+            Some("hyphen") => Ok(Some(SpaceReplace::Hyphen)),
+            Some("none") => Ok(Some(SpaceReplace::None)),
+            Some(other) => anyhow::bail!(
+                "unknown rename.space_replace '{}'. Valid values: underscore, hyphen, none",
+                other
+            ),
+        }
     }
 }
 
 /// Configuration for the emojis step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EmojiConfig {
     pub replace_task_emojis: Option<bool>,
     pub remove_other_emojis: Option<bool>,
@@ -98,6 +135,7 @@ pub struct EmojiConfig {
 
 /// Configuration for the clean step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CleanConfig {
     pub remove_trailing: Option<bool>,
     pub file_extensions: Option<Vec<String>>,
@@ -106,6 +144,7 @@ pub struct CleanConfig {
 
 /// Configuration for the convert step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConvertConfig {
     pub from_format: Option<String>,
     pub to_format: Option<String>,
@@ -115,20 +154,17 @@ pub struct ConvertConfig {
     pub suffix: Option<String>,
     pub glob: Option<String>,
     pub word_filter: Option<String>,
-}
-
-impl ConvertConfig {
-    pub fn parse_from_format(&self) -> Option<CaseFormat> {
-        self.from_format.as_deref().and_then(parse_case_format)
-    }
-
-    pub fn parse_to_format(&self) -> Option<CaseFormat> {
-        self.to_format.as_deref().and_then(parse_case_format)
-    }
+    pub strip_prefix: Option<String>,
+    pub strip_suffix: Option<String>,
+    pub replace_prefix_from: Option<String>,
+    pub replace_prefix_to: Option<String>,
+    pub replace_suffix_from: Option<String>,
+    pub replace_suffix_to: Option<String>,
 }
 
 /// Configuration for the group step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GroupConfig {
     pub separator: Option<String>,
     pub min_count: Option<usize>,
@@ -139,6 +175,7 @@ pub struct GroupConfig {
 
 /// Configuration for the endings step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EndingsConfig {
     pub style: Option<String>,
     pub file_extensions: Option<Vec<String>>,
@@ -147,6 +184,7 @@ pub struct EndingsConfig {
 
 /// Configuration for the indent step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IndentConfig {
     pub style: Option<String>,
     pub width: Option<usize>,
@@ -156,6 +194,7 @@ pub struct IndentConfig {
 
 /// A single replace pattern in config.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReplacePatternEntry {
     pub find: String,
     pub replace: String,
@@ -163,6 +202,7 @@ pub struct ReplacePatternEntry {
 
 /// Configuration for the replace step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReplaceConfig {
     pub patterns: Option<Vec<ReplacePatternEntry>>,
     pub file_extensions: Option<Vec<String>>,
@@ -171,11 +211,285 @@ pub struct ReplaceConfig {
 
 /// Configuration for the header step.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HeaderConfig {
     pub text: Option<String>,
     pub update_year: Option<bool>,
     pub file_extensions: Option<Vec<String>>,
     pub recursive: Option<bool>,
+}
+
+/// Converts a two-element `[from, to]` config entry into a pair.
+fn pair(values: &Option<Vec<String>>, field: &str) -> crate::Result<Option<(String, String)>> {
+    match values {
+        None => Ok(None),
+        Some(v) if v.len() == 2 => Ok(Some((v[0].clone(), v[1].clone()))),
+        Some(v) => anyhow::bail!("{} expects exactly 2 values, got {}", field, v.len()),
+    }
+}
+
+impl RenameConfig {
+    /// Builds the renamer options this config describes.
+    ///
+    /// This is the single place option assembly happens. The CLI builds a
+    /// `RenameConfig` from its flags and calls this, and so does the preset
+    /// runner -- previously each had its own copy, and they drifted.
+    pub fn to_options(&self, dry_run: bool) -> crate::Result<RenameOptions> {
+        let mut options = RenameOptions {
+            dry_run,
+            ..Default::default()
+        };
+        if let Some(v) = self.parse_case_transform()? {
+            options.case_transform = v;
+        }
+        if let Some(v) = self.parse_space_replace()? {
+            options.space_replace = v;
+        }
+        if let Some(v) = self.recursive {
+            options.recursive = v;
+        }
+        if let Some(v) = self.include_symlinks {
+            options.include_symlinks = v;
+        }
+        options.add_prefix = self.add_prefix.clone();
+        options.remove_prefix = self.remove_prefix.clone();
+        options.add_suffix = self.add_suffix.clone();
+        options.remove_suffix = self.remove_suffix.clone();
+        options.replace_prefix = pair(&self.replace_prefix, "rename.replace_prefix")?;
+        options.replace_suffix = pair(&self.replace_suffix, "rename.replace_suffix")?;
+        options.timestamp_format = match self.timestamp.as_deref() {
+            None => TimestampFormat::None,
+            Some("long") => TimestampFormat::Long,
+            Some("short") => TimestampFormat::Short,
+            Some("none") => TimestampFormat::None,
+            Some(other) => anyhow::bail!(
+                "unknown rename.timestamp '{}'. Valid values: long, short, none",
+                other
+            ),
+        };
+        Ok(options)
+    }
+}
+
+impl EmojiConfig {
+    /// Builds the emoji transformer options this config describes.
+    pub fn to_options(&self, dry_run: bool) -> EmojiOptions {
+        let mut options = EmojiOptions {
+            dry_run,
+            ..Default::default()
+        };
+        if let Some(v) = self.replace_task_emojis {
+            options.replace_task_emojis = v;
+        }
+        if let Some(v) = self.remove_other_emojis {
+            options.remove_other_emojis = v;
+        }
+        if let Some(ref v) = self.file_extensions {
+            options.file_extensions = v.clone();
+        }
+        if let Some(v) = self.recursive {
+            options.recursive = v;
+        }
+        options
+    }
+}
+
+impl CleanConfig {
+    /// Builds the whitespace cleaner options this config describes.
+    pub fn to_options(&self, dry_run: bool) -> WhitespaceOptions {
+        let mut options = WhitespaceOptions {
+            dry_run,
+            ..Default::default()
+        };
+        if let Some(v) = self.remove_trailing {
+            options.remove_trailing = v;
+        }
+        if let Some(ref v) = self.file_extensions {
+            options.file_extensions = v.clone();
+        }
+        if let Some(v) = self.recursive {
+            options.recursive = v;
+        }
+        options
+    }
+}
+
+impl ConvertConfig {
+    pub fn parse_from_format(&self) -> Option<CaseFormat> {
+        self.from_format.as_deref().and_then(parse_case_format)
+    }
+
+    pub fn parse_to_format(&self) -> Option<CaseFormat> {
+        self.to_format.as_deref().and_then(parse_case_format)
+    }
+
+    /// Builds the case converter this config describes.
+    pub fn to_converter(&self, dry_run: bool) -> crate::Result<CaseConverter> {
+        let from = self
+            .parse_from_format()
+            .ok_or_else(|| anyhow::anyhow!("convert.from_format is missing or invalid"))?;
+        let to = self
+            .parse_to_format()
+            .ok_or_else(|| anyhow::anyhow!("convert.to_format is missing or invalid"))?;
+
+        CaseConverter::new(
+            from,
+            to,
+            self.file_extensions.clone(),
+            self.recursive.unwrap_or(true),
+            dry_run,
+            self.prefix.clone().unwrap_or_default(),
+            self.suffix.clone().unwrap_or_default(),
+            self.strip_prefix.clone(),
+            self.strip_suffix.clone(),
+            self.replace_prefix_from.clone(),
+            self.replace_prefix_to.clone(),
+            self.replace_suffix_from.clone(),
+            self.replace_suffix_to.clone(),
+            self.glob.clone(),
+            self.word_filter.clone(),
+        )
+    }
+}
+
+impl GroupConfig {
+    /// Builds the file grouper options this config describes.
+    pub fn to_options(&self, dry_run: bool) -> crate::Result<GroupOptions> {
+        let mut options = GroupOptions {
+            dry_run,
+            ..Default::default()
+        };
+        if let Some(ref v) = self.separator {
+            let mut chars = v.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => options.separator = c,
+                _ => anyhow::bail!("group.separator must be a single character, got '{}'", v),
+            }
+        }
+        if let Some(v) = self.min_count {
+            options.min_count = v;
+        }
+        if let Some(v) = self.strip_prefix {
+            options.strip_prefix = v;
+        }
+        if let Some(v) = self.from_suffix {
+            options.from_suffix = v;
+            // Splitting at the last separator only makes sense together with
+            // stripping the prefix that precedes it.
+            if v {
+                options.strip_prefix = true;
+            }
+        }
+        if let Some(v) = self.recursive {
+            options.recursive = v;
+        }
+        Ok(options)
+    }
+}
+
+impl EndingsConfig {
+    /// Builds the line ending normalizer options this config describes.
+    pub fn to_options(&self, dry_run: bool) -> crate::Result<EndingsOptions> {
+        let mut options = EndingsOptions {
+            dry_run,
+            ..Default::default()
+        };
+        if let Some(ref v) = self.style {
+            options.style = LineEnding::parse(v).ok_or_else(|| {
+                anyhow::anyhow!("unknown endings.style '{}'. Valid values: lf, crlf, cr", v)
+            })?;
+        }
+        if let Some(ref v) = self.file_extensions {
+            options.file_extensions = v.clone();
+        }
+        if let Some(v) = self.recursive {
+            options.recursive = v;
+        }
+        Ok(options)
+    }
+}
+
+impl IndentConfig {
+    /// Builds the indentation normalizer options this config describes.
+    pub fn to_options(&self, dry_run: bool) -> crate::Result<IndentOptions> {
+        let mut options = IndentOptions {
+            dry_run,
+            ..Default::default()
+        };
+        if let Some(ref v) = self.style {
+            options.style = IndentStyle::parse(v).ok_or_else(|| {
+                anyhow::anyhow!("unknown indent.style '{}'. Valid values: spaces, tabs", v)
+            })?;
+        }
+        if let Some(v) = self.width {
+            if v == 0 {
+                anyhow::bail!("indent.width must be greater than 0");
+            }
+            options.width = v;
+        }
+        if let Some(ref v) = self.file_extensions {
+            options.file_extensions = v.clone();
+        }
+        if let Some(v) = self.recursive {
+            options.recursive = v;
+        }
+        Ok(options)
+    }
+}
+
+impl ReplaceConfig {
+    /// Builds the content replacer options this config describes.
+    pub fn to_options(&self, dry_run: bool) -> crate::Result<ReplaceOptions> {
+        let patterns = self
+            .patterns
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("replace.patterns is missing"))?
+            .iter()
+            .map(|p| ReplacePattern {
+                find: p.find.clone(),
+                replace: p.replace.clone(),
+            })
+            .collect();
+
+        let mut options = ReplaceOptions {
+            patterns,
+            dry_run,
+            ..Default::default()
+        };
+        if let Some(ref v) = self.file_extensions {
+            options.file_extensions = v.clone();
+        }
+        if let Some(v) = self.recursive {
+            options.recursive = v;
+        }
+        Ok(options)
+    }
+}
+
+impl HeaderConfig {
+    /// Builds the header manager options this config describes.
+    pub fn to_options(&self, dry_run: bool) -> crate::Result<HeaderOptions> {
+        let text = self
+            .text
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("header.text is missing"))?;
+
+        let mut options = HeaderOptions {
+            text,
+            dry_run,
+            ..Default::default()
+        };
+        if let Some(v) = self.update_year {
+            options.update_year = v;
+        }
+        if let Some(ref v) = self.file_extensions {
+            options.file_extensions = v.clone();
+        }
+        if let Some(v) = self.recursive {
+            options.recursive = v;
+        }
+        Ok(options)
+    }
 }
 
 fn parse_case_format(s: &str) -> Option<CaseFormat> {
@@ -235,10 +549,13 @@ mod tests {
         let rename = code.rename.as_ref().unwrap();
         assert_eq!(rename.case_transform.as_deref(), Some("lowercase"));
         assert_eq!(
-            rename.parse_case_transform(),
+            rename.parse_case_transform().unwrap(),
             Some(CaseTransform::Lowercase)
         );
-        assert_eq!(rename.parse_space_replace(), Some(SpaceReplace::Hyphen));
+        assert_eq!(
+            rename.parse_space_replace().unwrap(),
+            Some(SpaceReplace::Hyphen)
+        );
 
         let emojis = code.emojis.as_ref().unwrap();
         assert_eq!(emojis.replace_task_emojis, Some(true));
@@ -299,6 +616,21 @@ mod tests {
     }
 
     #[test]
+    fn test_unknown_enum_value_is_rejected() {
+        let json = r#"{"p": {"steps": ["rename"], "rename": {"case_transform": "lowercse"}}}"#;
+        let config: ReformatConfig = serde_json::from_str(json).unwrap();
+        let err = config["p"]
+            .rename
+            .as_ref()
+            .unwrap()
+            .parse_case_transform()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("lowercse"), "got: {}", err);
+        assert!(err.contains("Valid values"), "got: {}", err);
+    }
+
+    #[test]
     fn test_validate_steps_valid() {
         let steps = vec![
             "rename".to_string(),
@@ -333,8 +665,10 @@ mod tests {
         assert_eq!(parse_case_format("unknown"), None);
     }
 
+    /// A misspelled key must be reported, not silently dropped: the user
+    /// believes they configured something that never took effect.
     #[test]
-    fn test_unknown_fields_ignored() {
+    fn test_unknown_fields_are_rejected() {
         let json = r#"{
             "test": {
                 "steps": ["clean"],
@@ -345,10 +679,12 @@ mod tests {
             }
         }"#;
 
-        // serde default behavior: unknown fields cause an error unless denied
-        // We want to test current behavior
         let result: Result<ReformatConfig, _> = serde_json::from_str(json);
-        // By default serde_json ignores unknown fields
-        assert!(result.is_ok());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("some_future_field"),
+            "the unknown key should be named in the error, got: {}",
+            err
+        );
     }
 }

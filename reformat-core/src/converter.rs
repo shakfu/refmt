@@ -4,7 +4,6 @@ use crate::case::CaseFormat;
 use regex::Regex;
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
 /// Main converter for transforming case formats in files
 pub struct CaseConverter {
@@ -24,6 +23,39 @@ pub struct CaseConverter {
     glob_pattern: Option<glob::Pattern>,
     word_filter: Option<Regex>,
     source_pattern: Regex,
+}
+
+/// Builds the regex used to find conversion candidates, widening it to admit
+/// any configured prefix or suffix so that the affix options can act on what
+/// was matched.
+fn build_source_pattern(
+    format: CaseFormat,
+    prefixes: [Option<&str>; 2],
+    suffixes: [Option<&str>; 2],
+) -> String {
+    let base = format.pattern();
+    // Every format pattern is anchored with \b at both ends; work with the core.
+    let core = base
+        .strip_prefix(r"\b")
+        .unwrap_or(base)
+        .strip_suffix(r"\b")
+        .unwrap_or(base);
+
+    let group = |affixes: [Option<&str>; 2]| -> String {
+        let alts: Vec<String> = affixes
+            .iter()
+            .flatten()
+            .filter(|a| !a.is_empty())
+            .map(|a| regex::escape(a))
+            .collect();
+        if alts.is_empty() {
+            String::new()
+        } else {
+            format!("(?:{})?", alts.join("|"))
+        }
+    };
+
+    format!(r"\b{}{}{}\b", group(prefixes), core, group(suffixes))
 }
 
 impl CaseConverter {
@@ -55,7 +87,18 @@ impl CaseConverter {
             .collect()
         });
 
-        let source_pattern = Regex::new(from_format.pattern())?;
+        // The affix options operate on an identifier *after* it has been
+        // matched, so the match itself has to be able to include the affix.
+        // `\b[a-z]+(?:[A-Z]+[a-z0-9]*)+\b` never matches `m_userName` -- and
+        // `userName` inside it has no word boundary before it, `_` being a word
+        // character -- so `--strip-prefix m_`, documented with exactly that
+        // example, silently did nothing. Admit the configured affixes as
+        // optional parts of the match.
+        let source_pattern = Regex::new(&build_source_pattern(
+            from_format,
+            [strip_prefix.as_deref(), replace_prefix_from.as_deref()],
+            [strip_suffix.as_deref(), replace_suffix_from.as_deref()],
+        ))?;
         let glob_pattern = match glob_pattern {
             Some(pattern) => Some(glob::Pattern::new(&pattern)?),
             None => None,
@@ -166,6 +209,16 @@ impl CaseConverter {
 
     /// Processes a single file
     pub fn process_file(&self, filepath: &Path, base_path: &Path) -> crate::Result<()> {
+        // Skip hidden entries and build/vendor directories. Without this the
+        // converter rewrites identifiers inside `node_modules/` and `target/`.
+        if filepath
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_none_or(|n| crate::walk::is_excluded_component(n, crate::walk::DEFAULT_SKIP_DIRS))
+        {
+            return Ok(());
+        }
+
         // Check file extension
         let extension = filepath
             .extension()
@@ -186,7 +239,10 @@ impl CaseConverter {
         }
 
         // Read file content
-        let content = fs::read_to_string(filepath)?;
+        let content = match crate::text::read_text(filepath)? {
+            Some(c) => c,
+            None => return Ok(()),
+        };
 
         // Replace all matches of the source pattern
         let modified_content = self
@@ -195,13 +251,13 @@ impl CaseConverter {
 
         if content != modified_content {
             if self.dry_run {
-                println!("Would convert '{}'", filepath.display());
+                log::info!("Would convert '{}'", filepath.display());
             } else {
                 fs::write(filepath, modified_content.as_ref())?;
-                println!("Converted '{}'", filepath.display());
+                log::info!("Converted '{}'", filepath.display());
             }
         } else if !self.dry_run {
-            println!("No changes needed in '{}'", filepath.display());
+            log::debug!("No changes needed in '{}'", filepath.display());
         }
 
         Ok(())
@@ -210,8 +266,7 @@ impl CaseConverter {
     /// Processes a directory or file
     pub fn process_directory(&self, directory_path: &Path) -> crate::Result<()> {
         if !directory_path.exists() {
-            eprintln!("Path '{}' does not exist.", directory_path.display());
-            return Ok(());
+            anyhow::bail!("path '{}' does not exist", directory_path.display());
         }
 
         // If it's a single file, process it directly
@@ -226,33 +281,15 @@ impl CaseConverter {
 
         // Otherwise, process directory
         if !directory_path.is_dir() {
-            eprintln!(
-                "Path '{}' is not a directory or file.",
+            anyhow::bail!(
+                "path '{}' is not a directory or file",
                 directory_path.display()
             );
-            return Ok(());
         }
 
-        if self.recursive {
-            for entry in WalkDir::new(directory_path)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                if entry.file_type().is_file() {
-                    if let Err(e) = self.process_file(entry.path(), directory_path) {
-                        eprintln!("Error processing file '{}': {}", entry.path().display(), e);
-                    }
-                }
-            }
-        } else {
-            for entry in fs::read_dir(directory_path)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_file() {
-                    if let Err(e) = self.process_file(&path, directory_path) {
-                        eprintln!("Error processing file '{}': {}", path.display(), e);
-                    }
-                }
+        for entry in crate::walk::walk_files(directory_path, self.recursive) {
+            if let Err(e) = self.process_file(entry.path(), directory_path) {
+                log::warn!("Error processing file '{}': {}", entry.path().display(), e);
             }
         }
 
@@ -263,6 +300,59 @@ impl CaseConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--strip-prefix m_` is documented with exactly this example and used to
+    /// do nothing: the candidate pattern could not match `m_userName` at all.
+    #[test]
+    fn test_strip_prefix_is_matchable() {
+        let converter = CaseConverter::new(
+            CaseFormat::CamelCase,
+            CaseFormat::SnakeCase,
+            Some(vec![".py".to_string()]),
+            false,
+            false,
+            String::new(),
+            String::new(),
+            Some("m_".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // A unique directory per test: these run in parallel, and a shared
+
+        // fixture path lets them clobber each other. TempDir also cleans up
+
+        // when a test panics, which explicit teardown at the end does not.
+
+        let _tmp = tempfile::tempdir().unwrap();
+
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.py");
+        fs::write(&file, "m_userName = 1\nplainName = 2\n").unwrap();
+
+        converter.process_file(&file, &dir).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "user_name = 1\nplain_name = 2\n",
+            "the prefixed identifier was not converted"
+        );
+    }
+
+    #[test]
+    fn test_source_pattern_without_affixes_is_unchanged() {
+        assert_eq!(
+            build_source_pattern(CaseFormat::CamelCase, [None, None], [None, None]),
+            CaseFormat::CamelCase.pattern()
+        );
+    }
 
     #[test]
     fn test_camel_to_snake() {

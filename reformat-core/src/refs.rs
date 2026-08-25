@@ -20,6 +20,12 @@ pub struct ReferenceFix {
     pub line: usize,
     /// Column number (1-indexed)
     pub column: usize,
+    /// Byte offset of the reference within the file. This is the authoritative
+    /// position used when applying the fix; `line` and `column` are derived
+    /// from it for display. Optional so that records written by earlier
+    /// versions still load -- those fall back to line/column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
     /// The line content with context
     pub context: String,
     /// The old reference that needs to be fixed
@@ -139,6 +145,37 @@ impl Default for ScanOptions {
     }
 }
 
+/// Byte offsets at which each line of `content` starts.
+fn line_starts(content: &str) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+        .collect()
+}
+
+/// Characters that can form part of a filename. A match flanked by one of
+/// these is part of a longer name, not a reference to the moved file.
+///
+/// `/` is deliberately absent: a match preceded by a path separator (as in
+/// `tmpl/user_list.tmpl`) is a genuine reference, and rewriting just the
+/// trailing filename yields the correct new path.
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '-' || c == '.'
+}
+
+/// True if `content[start..end]` stands alone as a path reference rather than
+/// being embedded in a longer filename.
+fn is_standalone_reference(content: &str, start: usize, end: usize) -> bool {
+    let before_ok = content[..start]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !is_name_char(c));
+    let after_ok = content[end..]
+        .chars()
+        .next()
+        .is_none_or(|c| !is_name_char(c));
+    before_ok && after_ok
+}
+
 /// Reference scanner for finding broken references after file moves
 pub struct ReferenceScanner {
     options: ScanOptions,
@@ -152,7 +189,7 @@ pub struct ReferenceScanner {
 
 impl ReferenceScanner {
     /// Creates a new reference scanner from a change record
-    pub fn from_change_record(record: &ChangeRecord, options: ScanOptions) -> Self {
+    pub fn from_change_record(record: &ChangeRecord, options: ScanOptions) -> crate::Result<Self> {
         let mut file_moves = HashMap::new();
 
         for (from, to) in record.file_moves() {
@@ -173,54 +210,45 @@ impl ReferenceScanner {
         Self::new(file_moves, options)
     }
 
-    /// Creates a scanner from a mapping of old -> new paths
-    pub fn new(file_moves: HashMap<String, String>, options: ScanOptions) -> Self {
-        // Build the Aho-Corasick automaton for O(n) multi-pattern matching
-        let patterns: Vec<String> = file_moves.keys().cloned().collect();
-        let automaton =
-            AhoCorasick::new(&patterns).expect("Failed to build Aho-Corasick automaton");
+    /// Creates a scanner from a mapping of old -> new paths.
+    ///
+    /// Returns an error rather than panicking if the automaton cannot be
+    /// built: this is a public library constructor, and a pathological set of
+    /// move patterns should surface as an error to the caller.
+    pub fn new(file_moves: HashMap<String, String>, options: ScanOptions) -> crate::Result<Self> {
+        // Sorted so that scan output and fix ordering are reproducible; a
+        // HashMap's iteration order varies between runs.
+        let mut patterns: Vec<String> = file_moves.keys().cloned().collect();
+        patterns.sort();
 
-        ReferenceScanner {
+        // Aho-Corasick gives O(n) multi-pattern matching over each file.
+        let automaton = AhoCorasick::new(&patterns)
+            .map_err(|e| anyhow::anyhow!("failed to build reference matcher: {}", e))?;
+
+        Ok(ReferenceScanner {
             options,
             file_moves,
             automaton,
             patterns,
-        }
+        })
     }
 
-    /// Checks if a directory entry should be excluded from scanning
-    /// Used with filter_entry to prune entire subtrees before descending
+    /// Checks if a directory entry should be excluded from scanning.
+    /// Used with filter_entry to prune entire subtrees before descending.
+    ///
+    /// Delegates to `crate::walk::include_entry`, which always accepts the
+    /// walk root: pruning it would make `--scope .` scan nothing at all,
+    /// since the root's file name is literally `.`.
     fn should_include_entry(
         entry: &walkdir::DirEntry,
         exclude_patterns: &[String],
         verbose: bool,
     ) -> bool {
-        let name = match entry.file_name().to_str() {
-            Some(n) => n,
-            None => return false, // Skip entries with invalid UTF-8 names
-        };
-
-        // Skip hidden files/directories
-        if name.starts_with('.') {
-            if verbose && entry.file_type().is_dir() {
-                eprintln!("  [skip] {} (hidden)", entry.path().display());
-            }
-            return false;
+        let included = crate::walk::include_entry(entry, exclude_patterns);
+        if !included && verbose && entry.file_type().is_dir() {
+            log::info!("  [skip] {}", entry.path().display());
         }
-
-        // Skip excluded patterns
-        if exclude_patterns.iter().any(|p| p == name) {
-            if verbose && entry.file_type().is_dir() {
-                eprintln!(
-                    "  [skip] {} (excluded pattern: {})",
-                    entry.path().display(),
-                    name
-                );
-            }
-            return false;
-        }
-
-        true
+        included
     }
 
     /// Checks if a file should be scanned based on extension
@@ -246,9 +274,7 @@ impl ReferenceScanner {
         }
 
         // Build line index for efficient line/column lookup
-        let line_starts: Vec<usize> = std::iter::once(0)
-            .chain(content.match_indices('\n').map(|(i, _)| i + 1))
-            .collect();
+        let line_starts = line_starts(&content);
 
         let mut fixes = Vec::new();
         let file_path_str = path.to_string_lossy().to_string();
@@ -261,6 +287,14 @@ impl ReferenceScanner {
                 Some(r) => r,
                 None => continue,
             };
+
+            // Aho-Corasick matches bare substrings, so `user_list.tmpl` also
+            // matches inside `super_user_list.tmpl` and `user_list.tmpl.bak`,
+            // which are different files entirely. Require the match to stand
+            // alone as a path reference.
+            if !is_standalone_reference(&content, mat.start(), mat.end()) {
+                continue;
+            }
 
             // Binary search to find line number
             let byte_pos = mat.start();
@@ -279,6 +313,7 @@ impl ReferenceScanner {
                 file: file_path_str.clone(),
                 line: line_idx + 1,
                 column: column + 1,
+                offset: Some(byte_pos),
                 context: line_content.trim().to_string(),
                 old_reference: old_ref.clone(),
                 new_reference: new_ref.clone(),
@@ -297,13 +332,13 @@ impl ReferenceScanner {
         for dir in directories {
             if !dir.exists() {
                 if verbose {
-                    eprintln!("[scan] Directory does not exist: {}", dir.display());
+                    log::info!("[scan] Directory does not exist: {}", dir.display());
                 }
                 continue;
             }
 
             if verbose {
-                eprintln!("[scan] Starting scan of: {}", dir.display());
+                log::info!("[scan] Starting scan of: {}", dir.display());
             }
 
             let walker = if self.options.recursive {
@@ -325,7 +360,7 @@ impl ReferenceScanner {
 
                 // Print when entering a new directory
                 if verbose && entry.file_type().is_dir() {
-                    eprintln!("[scan] Entering directory: {}", path.display());
+                    log::info!("[scan] Entering directory: {}", path.display());
                     continue;
                 }
 
@@ -335,26 +370,26 @@ impl ReferenceScanner {
 
                 if !self.should_scan_file(path) {
                     if verbose {
-                        eprintln!("  [skip] {} (extension not in scan list)", path.display());
+                        log::info!("  [skip] {} (extension not in scan list)", path.display());
                     }
                     continue;
                 }
 
                 if verbose {
-                    eprintln!("  [file] {}", path.display());
+                    log::info!("  [file] {}", path.display());
                 }
                 files_scanned += 1;
 
                 match self.scan_file(path) {
                     Ok(fixes) => {
                         if verbose && !fixes.is_empty() {
-                            eprintln!("    -> Found {} reference(s)", fixes.len());
+                            log::info!("    -> Found {} reference(s)", fixes.len());
                         }
                         fix_record.fixes.extend(fixes);
                     }
                     Err(e) => {
                         if verbose {
-                            eprintln!("    -> Error: {}", e);
+                            log::info!("    -> Error: {}", e);
                         }
                         log::debug!("Skipping {}: {}", path.display(), e);
                     }
@@ -363,19 +398,25 @@ impl ReferenceScanner {
         }
 
         if verbose {
-            eprintln!(
+            log::info!(
                 "[scan] Complete. Scanned {} files, found {} references.",
                 files_scanned,
                 fix_record.fixes.len()
             );
         }
 
-        // Deduplicate fixes (same file/line might have multiple matches)
+        // Sort for stable output, then drop only exact duplicates. Two
+        // references on the same line at different columns are distinct
+        // occurrences that each need their own edit -- deduplicating on
+        // (file, line, old_reference) alone silently dropped all but one.
         fix_record
             .fixes
             .sort_by(|a, b| (&a.file, a.line, a.column).cmp(&(&b.file, b.line, b.column)));
         fix_record.fixes.dedup_by(|a, b| {
-            a.file == b.file && a.line == b.line && a.old_reference == b.old_reference
+            a.file == b.file
+                && a.line == b.line
+                && a.column == b.column
+                && a.old_reference == b.old_reference
         });
 
         Ok(fix_record)
@@ -396,11 +437,18 @@ impl ReferenceFixer {
             fixes_by_file.entry(&fix.file).or_default().push(fix);
         }
 
-        for (file_path, fixes) in fixes_by_file {
+        // Deterministic order so output and error reporting are reproducible.
+        let mut by_file: Vec<(&str, Vec<&ReferenceFix>)> = fixes_by_file.into_iter().collect();
+        by_file.sort_by(|a, b| a.0.cmp(b.0));
+
+        for (file_path, fixes) in by_file {
             match Self::apply_fixes_to_file(Path::new(file_path), &fixes) {
-                Ok(count) => {
-                    result.files_modified += 1;
-                    result.references_fixed += count;
+                Ok(outcome) => {
+                    if outcome.modified {
+                        result.files_modified += 1;
+                    }
+                    result.references_fixed += outcome.replaced;
+                    result.references_skipped += outcome.skipped;
                 }
                 Err(e) => {
                     result.errors.push(format!("{}: {}", file_path, e));
@@ -411,28 +459,89 @@ impl ReferenceFixer {
         Ok(result)
     }
 
-    /// Applies fixes to a single file
-    fn apply_fixes_to_file(path: &Path, fixes: &[&ReferenceFix]) -> crate::Result<usize> {
+    /// Resolves a recorded fix to a byte offset in the current file contents,
+    /// returning `None` if the text there is not what was recorded.
+    ///
+    /// This verification is what makes applying a record safe: a stale record,
+    /// a file edited since the scan, or a record that has already been applied
+    /// all fail the check and are skipped rather than corrupting the file.
+    fn resolve_span(content: &str, line_starts: &[usize], fix: &ReferenceFix) -> Option<usize> {
+        let start = match fix.offset {
+            Some(offset) => offset,
+            None => {
+                // Records written before offsets were stored: derive the
+                // position from the 1-indexed line and column.
+                let line_start = *line_starts.get(fix.line.checked_sub(1)?)?;
+                line_start + fix.column.checked_sub(1)?
+            }
+        };
+        let end = start.checked_add(fix.old_reference.len())?;
+
+        if end <= content.len()
+            && content.is_char_boundary(start)
+            && content.is_char_boundary(end)
+            && content[start..end] == fix.old_reference
+        {
+            Some(start)
+        } else {
+            None
+        }
+    }
+
+    /// Applies fixes to a single file by byte offset.
+    ///
+    /// Each recorded occurrence is edited in place. A global
+    /// `String::replace` was used here previously, which rewrote every
+    /// occurrence of the old filename anywhere in the file -- including inside
+    /// longer, unrelated filenames -- and compounded on a second run, since a
+    /// move such as `a.txt` -> `x/a.txt` re-introduces `a.txt` as a substring.
+    fn apply_fixes_to_file(path: &Path, fixes: &[&ReferenceFix]) -> crate::Result<FileOutcome> {
         let content = fs::read_to_string(path)?;
-        let mut new_content = content.clone();
-        let mut fixed_count = 0;
+        let line_starts = line_starts(&content);
 
-        // Apply fixes (we need to be careful about overlapping replacements)
+        let mut spans: Vec<(usize, usize, &str)> = Vec::with_capacity(fixes.len());
+        let mut skipped = 0;
+
         for fix in fixes {
-            let old = &fix.old_reference;
-            let new = &fix.new_reference;
-
-            if new_content.contains(old) {
-                new_content = new_content.replace(old, new);
-                fixed_count += 1;
+            match Self::resolve_span(&content, &line_starts, fix) {
+                Some(start) => spans.push((
+                    start,
+                    start + fix.old_reference.len(),
+                    fix.new_reference.as_str(),
+                )),
+                None => skipped += 1,
             }
         }
 
-        if new_content != content {
-            fs::write(path, new_content)?;
+        // Edit from the end of the file backwards so that earlier offsets stay
+        // valid as the content shifts.
+        spans.sort_by_key(|&(start, _, _)| std::cmp::Reverse(start));
+
+        let mut new_content = content.clone();
+        let mut replaced = 0;
+        let mut next_start = content.len();
+
+        for (start, end, replacement) in spans {
+            if end > next_start {
+                // Overlaps an edit already applied; leave it alone.
+                skipped += 1;
+                continue;
+            }
+            new_content.replace_range(start..end, replacement);
+            next_start = start;
+            replaced += 1;
         }
 
-        Ok(fixed_count)
+        let modified = new_content != content;
+        if modified {
+            fs::write(path, &new_content)?;
+        }
+
+        Ok(FileOutcome {
+            replaced,
+            skipped,
+            modified,
+        })
     }
 
     /// Performs a dry run, returning what would be changed
@@ -450,6 +559,16 @@ impl ReferenceFixer {
     }
 }
 
+/// Per-file outcome of applying fixes
+struct FileOutcome {
+    /// Occurrences actually rewritten
+    replaced: usize,
+    /// Recorded fixes that no longer matched and were skipped
+    skipped: usize,
+    /// Whether the file was written
+    modified: bool,
+}
+
 /// Result of applying fixes
 #[derive(Debug, Default)]
 pub struct ApplyResult {
@@ -457,6 +576,9 @@ pub struct ApplyResult {
     pub files_modified: usize,
     /// Number of references fixed
     pub references_fixed: usize,
+    /// Number of recorded fixes that no longer matched the file and were
+    /// skipped (a stale record, or one that has already been applied)
+    pub references_skipped: usize,
     /// Errors encountered
     pub errors: Vec<String>,
 }
@@ -464,31 +586,214 @@ pub struct ApplyResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
-    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+    /// Helper: build a scanner for a single move.
+    fn scanner_for(old: &str, new: &str) -> ReferenceScanner {
+        let mut moves = HashMap::new();
+        moves.insert(old.to_string(), new.to_string());
+        ReferenceScanner::new(moves, ScanOptions::default()).unwrap()
+    }
 
-    fn create_test_dir(name: &str) -> PathBuf {
-        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let test_dir = std::env::temp_dir().join(format!(
-            "reformat_refs_{}_{}_{}",
-            name,
-            std::process::id(),
-            counter
-        ));
-        let _ = fs::remove_dir_all(&test_dir);
-        fs::create_dir_all(&test_dir).unwrap();
-        test_dir
+    fn write(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let p = dir.join(name);
+        fs::write(&p, body).unwrap();
+        p
+    }
+
+    /// A filename that merely *contains* a moved filename is a different file
+    /// and must not be reported or rewritten.
+    #[test]
+    fn test_substring_matches_are_not_reported() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        write(
+            &dir,
+            "app.go",
+            concat!(
+                "render(\"user_list.tmpl\")\n",
+                "// see also super_user_list.tmpl elsewhere\n",
+                "load(\"user_list.tmpl.bak\")\n",
+                "use(\"tmpl/user_list.tmpl\")\n",
+            ),
+        );
+
+        let scanner = scanner_for("user_list.tmpl", "user/list.tmpl");
+        let record = scanner.scan(std::slice::from_ref(&dir)).unwrap();
+
+        // Only the standalone reference and the path-qualified one qualify.
+        assert_eq!(
+            record.len(),
+            2,
+            "expected 2 real references, got: {:#?}",
+            record.fixes
+        );
+        for fix in &record.fixes {
+            assert!(
+                !fix.context.contains("super_user_list"),
+                "matched inside a longer filename: {}",
+                fix.context
+            );
+            assert!(
+                !fix.context.contains(".tmpl.bak"),
+                "matched a different file with a longer extension: {}",
+                fix.context
+            );
+        }
+    }
+
+    /// Applying fixes must rewrite only the recorded occurrences, leaving
+    /// near-miss text in the same file untouched.
+    #[test]
+    fn test_apply_only_touches_recorded_occurrences() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        let file = write(
+            &dir,
+            "app.go",
+            concat!(
+                "render(\"user_list.tmpl\")\n",
+                "// see also super_user_list.tmpl elsewhere\n",
+            ),
+        );
+
+        let scanner = scanner_for("user_list.tmpl", "user/list.tmpl");
+        let record = scanner.scan(std::slice::from_ref(&dir)).unwrap();
+        let applied = ReferenceFixer::apply_fixes(&record).unwrap();
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            content,
+            concat!(
+                "render(\"user/list.tmpl\")\n",
+                "// see also super_user_list.tmpl elsewhere\n",
+            ),
+            "the unrelated super_user_list.tmpl reference was rewritten"
+        );
+        assert_eq!(applied.files_modified, 1);
+        assert_eq!(applied.references_fixed, 1);
+    }
+
+    /// Every occurrence on a line must be fixed, not just the first.
+    #[test]
+    fn test_multiple_occurrences_on_one_line_are_all_fixed() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        let file = write(
+            &dir,
+            "app.go",
+            "a(\"x.tmpl\"); b(\"x.tmpl\"); c(\"x.tmpl\")\n",
+        );
+
+        let scanner = scanner_for("x.tmpl", "g/x.tmpl");
+        let record = scanner.scan(std::slice::from_ref(&dir)).unwrap();
+        assert_eq!(record.len(), 3, "all three occurrences should be recorded");
+
+        let applied = ReferenceFixer::apply_fixes(&record).unwrap();
+        assert_eq!(
+            applied.references_fixed, 3,
+            "count must be occurrences, not fixes attempted"
+        );
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "a(\"g/x.tmpl\"); b(\"g/x.tmpl\"); c(\"g/x.tmpl\")\n"
+        );
+    }
+
+    /// Applying the same record twice must not compound the replacement.
+    /// `a.txt` -> `x/a.txt` re-introduces `a.txt` as a substring; a global
+    /// replace would turn the second run into `x/x/a.txt`.
+    #[test]
+    fn test_apply_is_idempotent() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        let file = write(&dir, "app.go", "open(\"a.txt\")\n");
+
+        let scanner = scanner_for("a.txt", "x/a.txt");
+        let record = scanner.scan(std::slice::from_ref(&dir)).unwrap();
+
+        let first = ReferenceFixer::apply_fixes(&record).unwrap();
+        assert_eq!(first.references_fixed, 1);
+        assert_eq!(fs::read_to_string(&file).unwrap(), "open(\"x/a.txt\")\n");
+
+        // Re-applying the same (now stale) record must change nothing.
+        let second = ReferenceFixer::apply_fixes(&record).unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "open(\"x/a.txt\")\n",
+            "re-applying compounded the replacement"
+        );
+        assert_eq!(second.references_fixed, 0);
+        assert_eq!(second.files_modified, 0, "no file was actually modified");
+        assert_eq!(
+            second.references_skipped, 1,
+            "the stale fix should be reported as skipped"
+        );
+    }
+
+    /// A file whose fixes all fail to apply must not be counted as modified.
+    #[test]
+    fn test_unmodified_files_are_not_counted() {
+        // A unique directory per test: these run in parallel, and a shared
+        // fixture path lets them clobber each other. TempDir also cleans up
+        // when a test panics, which explicit teardown at the end does not.
+        let _tmp = tempfile::tempdir().unwrap();
+        let dir = _tmp.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+
+        let file = write(&dir, "app.go", "open(\"a.txt\")\n");
+        let scanner = scanner_for("a.txt", "x/a.txt");
+        let record = scanner.scan(std::slice::from_ref(&dir)).unwrap();
+
+        // Edit the file out from under the record.
+        fs::write(&file, "open(\"something_else.txt\")\n").unwrap();
+
+        let applied = ReferenceFixer::apply_fixes(&record).unwrap();
+        assert_eq!(
+            applied.files_modified, 0,
+            "a file that was not written must not be counted"
+        );
+        assert_eq!(applied.references_fixed, 0);
+        assert_eq!(applied.references_skipped, 1);
+    }
+
+    /// Returns an owned temporary directory. The caller must keep the
+    /// `TempDir` alive: dropping it removes the directory.
+    fn create_test_dir(name: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("reformat-{}-", name))
+            .tempdir()
+            .unwrap()
     }
 
     #[test]
     fn test_find_reference_quoted() {
-        let test_dir = create_test_dir("quoted");
+        let _tmp = create_test_dir("quoted");
+        let test_dir = _tmp.path().to_path_buf();
 
         let mut moves = HashMap::new();
         moves.insert("old.tmpl".to_string(), "new/old.tmpl".to_string());
 
-        let scanner = ReferenceScanner::new(moves, ScanOptions::default());
+        let scanner = ReferenceScanner::new(moves, ScanOptions::default()).unwrap();
 
         // Test with double quotes
         let file1 = test_dir.join("test1.go");
@@ -507,13 +812,12 @@ mod tests {
         fs::write(&file3, "template: old.tmpl").unwrap();
         let fixes = scanner.scan_file(&file3).unwrap();
         assert_eq!(fixes.len(), 1);
-
-        let _ = fs::remove_dir_all(&test_dir);
     }
 
     #[test]
     fn test_scan_file() {
-        let test_dir = create_test_dir("scan");
+        let _tmp = create_test_dir("scan");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create a file with references
         let test_file = test_dir.join("handler.go");
@@ -534,19 +838,18 @@ func render() {
         moves.insert("wbs_create.tmpl".to_string(), "wbs/create.tmpl".to_string());
         moves.insert("wbs_delete.tmpl".to_string(), "wbs/delete.tmpl".to_string());
 
-        let scanner = ReferenceScanner::new(moves, ScanOptions::default());
+        let scanner = ReferenceScanner::new(moves, ScanOptions::default()).unwrap();
         let fixes = scanner.scan_file(&test_file).unwrap();
 
         assert_eq!(fixes.len(), 2);
         assert_eq!(fixes[0].old_reference, "wbs_create.tmpl");
         assert_eq!(fixes[0].new_reference, "wbs/create.tmpl");
-
-        let _ = fs::remove_dir_all(&test_dir);
     }
 
     #[test]
     fn test_scan_directories() {
-        let test_dir = create_test_dir("scandir");
+        let _tmp = create_test_dir("scandir");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create files with references
         fs::write(
@@ -571,17 +874,16 @@ template: old_file.tmpl
             "templates/file.tmpl".to_string(),
         );
 
-        let scanner = ReferenceScanner::new(moves, ScanOptions::default());
-        let fix_record = scanner.scan(&[test_dir.clone()]).unwrap();
+        let scanner = ReferenceScanner::new(moves, ScanOptions::default()).unwrap();
+        let fix_record = scanner.scan(std::slice::from_ref(&test_dir)).unwrap();
 
         assert_eq!(fix_record.len(), 2);
-
-        let _ = fs::remove_dir_all(&test_dir);
     }
 
     #[test]
     fn test_apply_fixes() {
-        let test_dir = create_test_dir("apply");
+        let _tmp = create_test_dir("apply");
+        let test_dir = _tmp.path().to_path_buf();
 
         let test_file = test_dir.join("test.go");
         fs::write(&test_file, r#"include "old.tmpl""#).unwrap();
@@ -595,6 +897,7 @@ template: old_file.tmpl
                 line: 1,
                 column: 10,
                 context: r#"include "old.tmpl""#.to_string(),
+                offset: None,
                 old_reference: "old.tmpl".to_string(),
                 new_reference: "new/old.tmpl".to_string(),
             }],
@@ -607,8 +910,6 @@ template: old_file.tmpl
         let content = fs::read_to_string(&test_file).unwrap();
         assert!(content.contains("new/old.tmpl"));
         assert!(!content.contains(r#""old.tmpl""#));
-
-        let _ = fs::remove_dir_all(&test_dir);
     }
 
     #[test]
@@ -622,6 +923,7 @@ template: old_file.tmpl
                 line: 10,
                 column: 15,
                 context: r#"include "old.tmpl""#.to_string(),
+                offset: None,
                 old_reference: "old.tmpl".to_string(),
                 new_reference: "new/old.tmpl".to_string(),
             }],
@@ -637,7 +939,8 @@ template: old_file.tmpl
 
     #[test]
     fn test_exclude_patterns() {
-        let test_dir = create_test_dir("exclude");
+        let _tmp = create_test_dir("exclude");
+        let test_dir = _tmp.path().to_path_buf();
 
         // Create a directory structure with excluded directories
         let node_modules = test_dir.join("node_modules");
@@ -655,13 +958,11 @@ template: old_file.tmpl
         let mut moves = HashMap::new();
         moves.insert("old.tmpl".to_string(), "new/old.tmpl".to_string());
 
-        let scanner = ReferenceScanner::new(moves, ScanOptions::default());
-        let fix_record = scanner.scan(&[test_dir.clone()]).unwrap();
+        let scanner = ReferenceScanner::new(moves, ScanOptions::default()).unwrap();
+        let fix_record = scanner.scan(std::slice::from_ref(&test_dir)).unwrap();
 
         // Only src/main.rs should be scanned - node_modules and .git should be excluded
         assert_eq!(fix_record.len(), 1);
         assert!(fix_record.fixes[0].file.contains("src"));
-
-        let _ = fs::remove_dir_all(&test_dir);
     }
 }
