@@ -448,6 +448,7 @@ impl FileRenamer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     /// One collision must not abort the run: the other files still get
     /// renamed, and the failure is reported rather than swallowed.
@@ -460,28 +461,37 @@ mod tests {
         let dir = _tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
 
-        // "B.txt" cannot become "b.txt" because that name is taken.
-        fs::write(dir.join("b.txt"), "x").unwrap();
-        fs::write(dir.join("B.txt"), "y").unwrap();
-        fs::write(dir.join("C.txt"), "z").unwrap();
-        fs::write(dir.join("D.txt"), "w").unwrap();
+        // The collision comes from space replacement, not from case: a
+        // case-only clash ("b.txt" vs "B.txt") cannot even be set up on the
+        // case-insensitive filesystems of macOS and Windows.
+        //
+        // "a b.txt" cannot become "a_b.txt" because that name is taken.
+        fs::write(dir.join("a_b.txt"), "x").unwrap();
+        fs::write(dir.join("a b.txt"), "y").unwrap();
+        fs::write(dir.join("c d.txt"), "z").unwrap();
+        fs::write(dir.join("e f.txt"), "w").unwrap();
 
         let renamer = FileRenamer::new(RenameOptions {
-            case_transform: CaseTransform::Lowercase,
+            space_replace: SpaceReplace::Underscore,
             ..Default::default()
         });
         let stats = renamer.process_with_stats(&dir).unwrap();
 
-        assert_eq!(stats.renamed, 2, "C.txt and D.txt should still be renamed");
+        assert_eq!(
+            stats.renamed, 2,
+            "'c d.txt' and 'e f.txt' should still be renamed"
+        );
         assert_eq!(
             stats.skipped, 1,
             "the collision should be counted, not fatal"
         );
         assert_eq!(stats.errors.len(), 1);
-        assert!(dir.join("c.txt").exists());
-        assert!(dir.join("d.txt").exists());
+        assert!(dir.join("c_d.txt").exists());
+        assert!(dir.join("e_f.txt").exists());
+        // The blocked file is left where it was, with its content intact.
+        assert_eq!(fs::read_to_string(dir.join("a b.txt")).unwrap(), "y");
+        assert_eq!(fs::read_to_string(dir.join("a_b.txt")).unwrap(), "x");
     }
-    use std::fs;
 
     #[test]
     fn test_lowercase_transform() {
