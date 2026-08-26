@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Internal
+
+- `test_collision_does_not_abort_the_run` could not run on case-insensitive
+  filesystems, so the macOS and Windows CI jobs failed on 0.1.8. The test built
+  its collision from a case-only clash, writing `b.txt` and then `B.txt`; on
+  APFS and NTFS the second write overwrites the first, so the collision it
+  meant to exercise never existed and the run reported zero skipped files. The
+  fixture now derives the collision from space replacement -- `a b.txt` cannot
+  become `a_b.txt` because that name is taken -- which behaves the same on
+  every platform, and it additionally asserts that the blocked file keeps its
+  original name and contents.
+- No library or binary code changed, and no released version is affected.
+  `FileRenamer` already handled this correctly: it canonicalizes both paths
+  before reporting a collision, so a case-only rename on a case-insensitive
+  filesystem is allowed rather than refused.
+
 ## [0.1.8] - 2026-08-26
 
 A documentation and metadata release. No behavioural changes.
@@ -857,8 +875,3 @@ This release represents a major architectural overhaul and feature expansion. Th
 - Glob matching supports both filename and relative path patterns
 - Error handling with user-friendly messages
 
-### Legacy
-
-- Python implementation (case_converter.py) remains available for compatibility
-
-[0.1.0]: https://github.com/yourusername/code-convert/releases/tag/v0.1.0
